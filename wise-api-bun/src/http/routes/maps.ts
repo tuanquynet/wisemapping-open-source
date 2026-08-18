@@ -662,10 +662,21 @@ function parseCollabs(body: Record<string, unknown>): {
   return { collabs };
 }
 
-/** Resolves an email to an account, creating an invitee placeholder if needed. */
-function resolveCollaborator(email: string): number {
-  const existing = accounts.findByEmail(email);
-  return existing !== null ? existing.id : accounts.createPlaceholder(email).id;
+/**
+ * Resolves an email to an account, creating an invitee placeholder if needed.
+ *
+ * `async` since Task 2.2 ported `accounts.ts` off `bun:sqlite` -- it can no
+ * longer run inside `db.transaction()`'s synchronous callback below, so both
+ * call sites resolve every collaborator's account id *before* opening the
+ * transaction and use the pre-resolved ids inside it. This is the same
+ * pre-read-before-write restructuring Task 4.2 will apply throughout this
+ * file once `collaborations.ts`/`mindmaps.ts` are themselves ported
+ * (Architecture Decision 2, tasks/plan.md); it lands here first because the
+ * compiler forces it the moment `accounts.ts` becomes async.
+ */
+async function resolveCollaborator(email: string): Promise<number> {
+  const existing = await accounts.findByEmail(email);
+  return existing !== null ? existing.id : (await accounts.createPlaceholder(email)).id;
 }
 
 /** GET /maps/{id}/collabs */
@@ -689,6 +700,15 @@ mapRoutes.post(
 
     const keep = new Set(collabs.map((x) => x.email.toLowerCase()));
 
+    // Resolve every non-owner email to an account id before the transaction
+    // -- resolveCollaborator may write a placeholder row, so it cannot run
+    // inside db.transaction()'s synchronous callback.
+    const resolvedIds = new Map<string, number>();
+    for (const { email } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
+      resolvedIds.set(email, await resolveCollaborator(email));
+    }
+
     db.transaction(() => {
       for (const existing of collaborations.listForMap(map.id)) {
         if (
@@ -700,7 +720,7 @@ mapRoutes.post(
       }
       for (const { email, role } of collabs) {
         if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
-        collaborations.upsert(map.id, resolveCollaborator(email), role);
+        collaborations.upsert(map.id, resolvedIds.get(email)!, role);
       }
     })();
 
@@ -717,6 +737,15 @@ mapRoutes.put(
     const map = currentMap(c);
     const { collabs } = parseCollabs(await jsonBody(c));
 
+    // Same pre-resolution as above; also skips the owner's own email so a
+    // rejected request (see the ConflictError below) never creates an
+    // unwanted placeholder row for it.
+    const resolvedIds = new Map<string, number>();
+    for (const { email } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
+      resolvedIds.set(email, await resolveCollaborator(email));
+    }
+
     db.transaction(() => {
       for (const { email, role } of collabs) {
         if (email.toLowerCase() === map.creatorEmail.toLowerCase()) {
@@ -726,7 +755,7 @@ mapRoutes.put(
         if (existing !== null && existing.role === "owner") {
           throw new ConflictError(`Ownership can not be modified: ${email}`);
         }
-        collaborations.upsert(map.id, resolveCollaborator(email), role);
+        collaborations.upsert(map.id, resolvedIds.get(email)!, role);
       }
     })();
 

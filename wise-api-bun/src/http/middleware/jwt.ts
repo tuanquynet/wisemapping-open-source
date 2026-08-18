@@ -23,7 +23,7 @@ export const jwt = createMiddleware<Env>(async (c, next) => {
   if (token !== null) {
     const claims = await verifyToken(token);
     if (claims !== null) {
-      const account = accounts.findByEmail(claims.sub);
+      const account = await accounts.findByEmail(claims.sub);
       // A placeholder or unactivated account must not count as authenticated.
       if (
         account !== null &&

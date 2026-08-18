@@ -39,12 +39,12 @@ userRoutes.post("/", async (c) => {
  * even for an unknown address: the Java app throws EmailNotExistsException here,
  * which turns the endpoint into an account-existence oracle.
  */
-userRoutes.put("/resetPassword", (c) => {
+userRoutes.put("/resetPassword", async (c) => {
   const email = c.req.query("email");
   if (email === undefined || email === "") {
     throw new BadRequestError("An email address is required.");
   }
-  return c.json(authService.requestPasswordReset(email));
+  return c.json(await authService.requestPasswordReset(email));
 });
 
 /** POST /api/restful/users/resetPasswordToken -- public, 204. */
@@ -61,11 +61,11 @@ userRoutes.post("/resetPasswordToken", async (c) => {
  * the Java app; `Number()` on its 19 digits loses precision, which would fail
  * activation for a subset of accounts.
  */
-userRoutes.put("/activation", (c) => {
+userRoutes.put("/activation", async (c) => {
   const code = c.req.query("code");
   if (code === undefined || code === "") {
     throw new BadRequestError("An activation code is required.");
   }
-  authService.activate(code);
+  await authService.activate(code);
   return c.body(null, 204);
 });

@@ -98,7 +98,7 @@ export async function register(
     fieldErrors.password = `The password must have less than ${MAX_PASSWORD_LENGTH} characters.`;
 
   if (fieldErrors.email === undefined) {
-    const existing = accounts.findRowByEmail(email);
+    const existing = await accounts.findRowByEmail(email);
     // A placeholder is not a conflict -- registration upgrades it in place.
     if (existing !== null && existing.password_hash !== null) {
       fieldErrors.email =
@@ -116,7 +116,7 @@ export async function register(
   const needsConfirmation = config.emailConfirmationEnabled;
   const activationCode = needsConfirmation ? newActivationCode() : null;
 
-  const account = accounts.createOrUpgrade({
+  const account = await accounts.createOrUpgrade({
     email,
     firstname,
     lastname,
@@ -136,8 +136,8 @@ export async function register(
   return { account, activationCode };
 }
 
-export function activate(code: string): void {
-  const account = accounts.findByActivationCode(code);
+export async function activate(code: string): Promise<void> {
+  const account = await accounts.findByActivationCode(code);
   if (account === null) {
     // Covers both an unknown code and an already-activated one, since
     // activation clears the code.
@@ -145,7 +145,7 @@ export function activate(code: string): void {
       "The activation code is invalid or has already been used.",
     );
   }
-  accounts.activate(account.id);
+  await accounts.activate(account.id);
 }
 
 /**
@@ -163,7 +163,7 @@ export async function login(
   const email = asString(emailInput).trim();
   const password = asString(passwordInput);
 
-  const row = email === "" ? null : accounts.findRowByEmail(email);
+  const row = email === "" ? null : await accounts.findRowByEmail(email);
 
   if (row === null || row.password_hash === null) {
     // Verify against a real throwaway hash so a missing account costs the same
@@ -213,23 +213,27 @@ export async function changePassword(
       `The password must have less than ${MAX_PASSWORD_LENGTH} characters.`,
     );
   }
-  accounts.updatePasswordHash(account.id, await hasher.hash(password));
+  await accounts.updatePasswordHash(account.id, await hasher.hash(password));
 }
 
 /** Mirrors `RestResetPasswordAction`. OAUTH2_USER is unreachable here. */
 export type ResetPasswordAction = "EMAIL_SENT" | "OAUTH2_USER";
 
-export function requestPasswordReset(email: unknown): {
+export async function requestPasswordReset(email: unknown): Promise<{
   action: ResetPasswordAction;
-} {
-  const account = accounts.findRowByEmail(asString(email));
+}> {
+  const account = await accounts.findRowByEmail(asString(email));
 
   // Always report EMAIL_SENT: a distinct "no such user" reply would let anyone
   // test which addresses are registered. (The Java app throws
   // EmailNotExistsException here; not reproducing that is a deliberate choice.)
   if (account !== null && account.password_hash !== null) {
     const token = crypto.randomUUID().replaceAll("-", "");
-    accounts.setResetToken(account.id, token, Date.now() + RESET_TOKEN_TTL_MS);
+    await accounts.setResetToken(
+      account.id,
+      token,
+      Date.now() + RESET_TOKEN_TTL_MS,
+    );
     logger.info(
       `Password reset for ${account.email}: ${config.uiBaseUrl}/c/reset-password?token=${token}`,
     );
@@ -244,13 +248,13 @@ export async function resetPasswordFromToken(
   hasher: PasswordHasher = bunPasswordHasher,
 ): Promise<void> {
   const raw = asString(token);
-  const row = raw === "" ? null : accounts.findRowByResetToken(raw);
+  const row = raw === "" ? null : await accounts.findRowByResetToken(raw);
 
   if (row === null || row.reset_token_expires === null) {
     throw new BadRequestError("The reset link is invalid or has expired.");
   }
   if (row.reset_token_expires < Date.now()) {
-    accounts.clearResetToken(row.id);
+    await accounts.clearResetToken(row.id);
     throw new BadRequestError("The reset link is invalid or has expired.");
   }
 
@@ -265,7 +269,7 @@ export async function resetPasswordFromToken(
   }
 
   // updatePasswordHash clears the token, making it single-use.
-  accounts.updatePasswordHash(row.id, await hasher.hash(password));
+  await accounts.updatePasswordHash(row.id, await hasher.hash(password));
 }
 
 /** Admin is a single configured email, as in the Java app (`app.admin.user`). */
