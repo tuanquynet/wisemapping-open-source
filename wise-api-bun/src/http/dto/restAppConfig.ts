@@ -1,4 +1,4 @@
-import { config } from "../../config.bun.ts";
+import type { Config } from "../../config.ts";
 
 /**
  * Mirrors `rest/model/RestAppConfig.java`.
@@ -25,7 +25,14 @@ export interface RestAppConfig {
   jwtExpirationMin: number;
 }
 
-export function buildAppConfig(): RestAppConfig {
+/**
+ * Takes `Config` as an explicit parameter -- not the Bun-only
+ * `config.bun.ts` singleton -- so this function works unmodified on both
+ * the Bun entrypoint (`http/routes/app.ts`, passing `config.bun.ts`'s
+ * value) and the Cloudflare Workers skeleton (`workers.ts`, passing a
+ * `buildConfig(c.env)` result).
+ */
+export function buildAppConfig(config: Config): RestAppConfig {
   const result: RestAppConfig = {
     apiBaseUrl: config.apiBaseUrl,
     uiBaseUrl: config.uiBaseUrl,
