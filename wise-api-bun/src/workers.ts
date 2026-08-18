@@ -66,3 +66,5 @@ app.all("*", (c) =>
 export default {
   fetch: app.fetch,
 };
+
+export { MapLockDurableObject } from "./durable-objects/MapLockDurableObject.ts";

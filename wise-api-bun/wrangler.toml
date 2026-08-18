@@ -16,9 +16,10 @@ binding = "DB"
 database_name = "wise-api-bun-dev"
 database_id = "00000000-0000-0000-0000-000000000000"
 
-# No `[[durable_objects.bindings]]` yet, deliberately: `MapLockDurableObject`
-# doesn't exist until Task 5.2, and `wrangler dev`/`deploy` hard-fails if a
-# durable_objects binding names a class the entrypoint doesn't export
-# (confirmed empirically: "Your Worker depends on the following Durable
-# Objects, which are not exported in your entrypoint file"). Added in
-# Task 5.2/6.2 once the class exists.
+[[durable_objects.bindings]]
+name = "MAP_LOCKS"
+class_name = "MapLockDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["MapLockDurableObject"]
