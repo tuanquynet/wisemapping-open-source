@@ -17,86 +17,80 @@ WiseMapping provides a comprehensive set of features for creating, managing, and
 - **📝 Rich Content**: Add detailed notes, links, and formatted text to nodes
 - **🔒 Self-hosted**: Complete control over your data with on-premise deployment
 - **🌐 Multi-language**: Available in multiple languages (English, Spanish, French, German, Italian, Russian, Chinese, and more)
-- **🔌 REST API**: Full REST API for integration and automation
-- **📈 User Management**: Authentication with database, Google OAuth, Facebook OAuth, and LDAP support
-- **💾 Supported Persistence**: PostgreSQL v15+ (recommended for production), MySQL v8+ (supported for production), HSQLDB v2.7+ (development/testing only)
+- **🔌 REST API**: Full REST API built with Bun, Hono, and TypeScript
+- **📈 User Management**: Authentication, JWT tokens, and account management
+- **💾 Embedded Persistence**: Built-in SQLite database (`bun:sqlite`), no external database server required
 - **🐳 Docker Deployment**: Production-ready Docker images available on [Docker Hub](https://hub.docker.com/r/wisemapping/wisemapping)
-
-
-
-## Deployment (Production - Recommended)
-
-For production deployments, follow the official Docker images and instructions on Docker Hub: `https://hub.docker.com/r/wisemapping/wisemapping`.
 
 ## Development (Local)
 
-The following steps are intended for local development only (not production). For production, see the Deployment section above.
+The following steps are intended for local development.
 
-## Prerequisites
+### Prerequisites
 
-    * JDK 24 or higher
-    * Maven v3.x or higher ([http://maven.apache.org/])
-    * Yarn v12 or higher
-    * Node v24 or higher
+- **Bun** (v1.x or higher — [https://bun.sh](https://bun.sh))
+- **Node.js** (v24 or higher)
+- **Yarn** (v4 or higher)
 
-## Option 1: Quick Start with Docker Compose
+---
 
-The following command line will start WiseMapping locally using HSQLDB in memory for development purposes:
+### Step 1: Start Backend API (`wise-api-bun`)
 
+The REST API backend lives under `wise-api-bun/`.
 
+```sh
+cd wise-api-bun
 
-```
-$ mvn -f wise-api/pom.xml package
-$ docker compose up --build
-```
+# Install dependencies
+bun install
 
-Application will start at http://localhost/c/login. You can login using *test@wisemapping.org* and password *test*
+# Configure environment variables
+cp .env.example .env
+echo "JWT_SECRET=$(openssl rand -base64 48)" >> .env
 
-## Option 2: Start Frontend and Backend API
-
-### Compile and Start API
-
-```
-$ mvn -f wise-api/pom.xml package
-$ cd wise-api
-$ mvn spring-boot:run
+# Start development server (runs on http://localhost:8080)
+bun run dev
 ```
 
-### Compile and Start Frontend
-
-You need to checkout https://github.com/wisemapping/wisemapping-frontend first. Then, follow the next steps:
-
-```
-$ export NODE_OPTIONS=--openssl-legacy-provider
-$ export APP_CONFIG_TYPE="file:dev"
-
-$ cd wisemapping-frontend
-$ yarn install 
-$ yarn build
-
-$ cd packages/webapp; yarn start
-```
-Application will start at http://localhost:3000/c/login. You can login using *test@wisemapping.org* and password *test*
-
-# Supportability Matrix
-
-## Databases
-
-* **PostgreSQL v15 or higher** (Recommended for production)
-* **MySQL v8 or higher** (Supported for production)
-* **Hsqldb v2.7 or higher** (Development and testing only - NOT for production)
-
-# Configuration
-
-WiseMapping backend is based on SpringBoot v3 and it's highly customizable. Additional documentation can be found [here](https://docs.spring.io/spring-boot/3.3/reference/features/external-config.html)
-
-The perfered option is to extended by overwriting [application.yaml](https://github.com/wisemapping/wisemapping-open-source/blob/develop/wise-api/src/main/resources/application.yml)
-
-```
-$ java -jar target/wisemapping-api.jar --spring.config.additional-location=../../wise-conf/app.yml
+Run tests & typechecks:
+```sh
+bun test
+bun run typecheck
 ```
 
-For example, this [example](https://github.com/wisemapping/wisemapping-open-source/blob/develop/config/database/postgresql/app-postgresql.yaml) configure PostgreSQL as database.
+---
+
+### Step 2: Start Frontend (`wisemapping-frontend`)
+
+Checkout `https://github.com/wisemapping/wisemapping-frontend` alongside this repository:
+
+```sh
+export NODE_OPTIONS=--openssl-legacy-provider
+export APP_CONFIG_TYPE="file:dev"
+
+cd wisemapping-frontend
+yarn install 
+yarn build
+
+cd packages/webapp
+yarn start
+```
+
+Application will be available at http://localhost:3000/c/login.
+
+---
+
+## Configuration
+
+The backend is configured via environment variables (`.env` file in `wise-api-bun/`):
+
+- `PORT` — server port (default: `8080`).
+- `JWT_SECRET` — **Required**. JWT signing key.
+- `DATABASE_PATH` — SQLite database file location (default: `./data/wisemapping.db`).
+- `EMAIL_CONFIRMATION_ENABLED` — set to `true` to enable email confirmations (activation links logged to stdout).
+- `SITE_BASE_URL` — base URL used for links (default: `http://localhost:8080`).
+
+---
 
 # Members
 
@@ -114,11 +108,9 @@ For example, this [example](https://github.com/wisemapping/wisemapping-open-sour
 The source code is Licensed under the WiseMapping Open License, Version 1.0 (the “License”);
 You may obtain a copy of the License at: [https://github.com/wisemapping/wisemapping-open-source/blob/develop/LICENSE.md](https://github.com/wisemapping/wisemapping-open-source/blob/develop/LICENSE.md)
 
+---
 
 ## 📚 Documentation
 
-- **[API Documentation](doc/api-documentation/README.md)** - Complete REST API documentation with examples
-- **[Backend Documentation](doc/api-documentation/backend/README.md)** - Backend-specific documentation including telemetry and OpenAPI specs
-- **[Deployment Guide](distribution/)** - Docker and deployment documentation
-
-> This README focuses on development setup. For production, use the Deployment section below.
+- **[CLAUDE.md](CLAUDE.md)** — Guide for AI coding assistants working in this repository
+- **[API Documentation](doc/api-documentation/README.md)** — REST API reference and details
