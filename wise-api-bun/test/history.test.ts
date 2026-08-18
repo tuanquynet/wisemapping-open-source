@@ -108,15 +108,14 @@ describe("history", () => {
     const id = await createMap(user, "Capped");
 
     for (let i = 0; i < 35; i++) {
-      historyRepo.insert(id, 1, xmlWith(`v${i}`));
+      await historyRepo.insert(id, 1, xmlWith(`v${i}`));
     }
-
     const body = await json(
       get(`${API}/maps/${id}/history/`, { headers: user.authHeaders }),
     );
     expect(body.count).toBe(30);
     // The rows still exist; only the API view is capped.
-    expect(historyRepo.countForMap(id)).toBe(35);
+    expect(await historyRepo.countForMap(id)).toBe(35);
   });
 
   test("an entry older than the 30-cap is unreachable by id", async () => {
@@ -126,11 +125,10 @@ describe("history", () => {
     const id = await createMap(user, "Unreachable");
 
     for (let i = 0; i < 35; i++) {
-      historyRepo.insert(id, 1, xmlWith(`v${i}`));
+      await historyRepo.insert(id, 1, xmlWith(`v${i}`));
     }
 
-    const all = historyRepo.countForMap(id);
-    expect(all).toBe(35);
+    const all = await historyRepo.countForMap(id);
 
     // The oldest entry has the lowest id; it is outside the newest 30.
     const oldestId = 1;

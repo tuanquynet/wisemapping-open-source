@@ -8,7 +8,8 @@ import * as mindmaps from "../../db/repos/mindmaps.ts";
 import * as lockManager from "../../services/lockManager.ts";
 import * as mindmapService from "../../services/mindmapService.ts";
 import { config } from "../../config.bun.ts";
-import { db } from "../../db/client.ts";
+import { dbAdapter } from "../../db/client.ts";
+import type { Statement } from "../../db/adapter.ts";
 import { accepts, parseFilter } from "../../domain/mindmapFilter.ts";
 import { defaultMindmapXml } from "../../domain/mindmapXml.ts";
 import { parseRole } from "../../domain/roles.ts";
@@ -52,11 +53,11 @@ async function jsonBody(c: {
 }
 
 /** The caller's per-map view state, defaulted for admins and public viewers. */
-function viewState(
+async function viewState(
   mapId: number,
   userId: number,
-): { properties: string; starred: boolean } {
-  const collab = collaborations.findForMapAndAccount(mapId, userId);
+): Promise<{ properties: string; starred: boolean }> {
+  const collab = await collaborations.findForMapAndAccount(mapId, userId);
   return collab === null
     ? { properties: DEFAULT_MINDMAP_PROPERTIES, starred: false }
     : { properties: collab.mindmapProperties, starred: collab.starred };
@@ -69,9 +70,8 @@ function viewState(
 /**
  * DELETE /maps/batch?ids=1,2,3
  *
- * The Java version wraps the whole loop in a try/catch that rethrows ANY failure
- * as AccessDeniedSecurityException, so a bad id and a permission failure are
- * indistinguishable. One transaction here, so a partial batch cannot commit.
+ * Pre-validates every map id and permission before running deletions,
+ * preserving the property that a bad id or permission failure deletes nothing.
  */
 mapRoutes.delete("/batch", requireUser, async (c) => {
   const user = currentUser(c);
@@ -94,7 +94,7 @@ mapRoutes.delete("/batch", requireUser, async (c) => {
       throw new NotFoundError(`Map with id ${id} could not be found.`);
     }
     // Deletion requires only READ, as in MindmapServiceImpl.removeMindmap.
-    if (!mindmapService.hasMapPermission(user, map, "viewer")) {
+    if (!(await mindmapService.hasMapPermission(user, map, "viewer"))) {
       throw new AccessDeniedError(`Maps could not be deleted: ${raw}`);
     }
     mapsToDelete.push(map);
@@ -115,7 +115,7 @@ mapRoutes.get("/", requireUser, async (c) => {
   // filter can return fewer results than actually match.
   const all = await mindmaps.listForAccount(user.id, config.mapListMaxSize);
 
-  const labelRows = labels.listForMaps(
+  const labelRows = await labels.listForMaps(
     all.map((m) => m.id),
     user.id,
   );
@@ -248,7 +248,7 @@ mapRoutes.post("/validate-note", requireUser, async (c) => {
 mapRoutes.get("/:id", requireUser, requireMapAccess("viewer"), async (c) => {
   const map = currentMap(c);
   const user = currentUser(c);
-  const state = viewState(map.id, user.id);
+  const state = await viewState(map.id, user.id);
   return c.json(
     toRestMindmap(
       map,
@@ -271,7 +271,7 @@ mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), async (c) => {
   const user = c.get("user");
 
   const collab =
-    user === null ? null : collaborations.findForMapAndAccount(map.id, user.id);
+    user === null ? null : await collaborations.findForMapAndAccount(map.id, user.id);
 
   // The holder sees their own lock as absent; only another user's name appears.
   const lock = lockManager.getLockInfo(map.id);
@@ -345,10 +345,10 @@ mapRoutes.put(
     const xml = mindmapService.validateAndNormalizeXml(body.xml);
     const minor = c.req.query("minor") === "true";
 
-    collaborations.updateProperties(
+    await collaborations.updateProperties(
       map.id,
       user.id,
-      body.properties as string,
+      body.properties,
     );
     await mindmapService.saveDocument(map, user, xml, { minor });
 
@@ -378,7 +378,7 @@ mapRoutes.put("/:id", requireUser, requireMapAccess("editor"), async (c) => {
     await mindmaps.updateDescription(map.id, body.description);
   }
   if (typeof body.properties === "string") {
-    collaborations.updateProperties(map.id, user.id, body.properties);
+    await collaborations.updateProperties(map.id, user.id, body.properties);
   }
   await mindmapService.saveDocument(map, user, xml, { minor });
 
@@ -471,18 +471,18 @@ mapRoutes.put(
   async (c) => {
     const map = currentMap(c);
     const user = currentUser(c);
-    mindmapService.requireOwnCollaboration(map.id, user);
+    await mindmapService.requireOwnCollaboration(map.id, user);
 
     // Boolean.parseBoolean semantics: anything not "true" is false.
     const starred = (await c.req.text()).trim().toLowerCase() === "true";
-    collaborations.updateStarred(map.id, user.id, starred);
+    await collaborations.updateStarred(map.id, user.id, starred);
     return c.body(null, 204);
   },
 );
 
 /** GET /maps/{id}/starred -- text/plain "true"/"false", NOT JSON. */
-mapRoutes.get("/:id/starred", requireUser, requireMapAccess("viewer"), (c) => {
-  const collab = mindmapService.requireOwnCollaboration(
+mapRoutes.get("/:id/starred", requireUser, requireMapAccess("viewer"), async (c) => {
+  const collab = await mindmapService.requireOwnCollaboration(
     currentMap(c).id,
     currentUser(c),
   );
@@ -494,10 +494,10 @@ mapRoutes.get("/:id/starred", requireUser, requireMapAccess("viewer"), (c) => {
 // ---------------------------------------------------------------------------
 
 /** GET /maps/{id}/history/ -- newest first, capped at 30. */
-mapRoutes.get("/:id/history", requireUser, requireMapAccess("viewer"), (c) => {
-  const changes = history
-    .listForMap(currentMap(c).id)
-    .map(toRestMindmapHistory);
+mapRoutes.get("/:id/history", requireUser, requireMapAccess("viewer"), async (c) => {
+  const changes = (await history.listForMap(currentMap(c).id)).map(
+    toRestMindmapHistory,
+  );
   return c.json({ count: changes.length, changes });
 });
 
@@ -506,14 +506,14 @@ mapRoutes.get(
   "/:id/:hid/document/xml",
   requireUser,
   requireMapAccess("viewer"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const hid = Number(c.req.param("hid"));
     if (!Number.isInteger(hid)) {
       throw new BadRequestError(`Invalid history id: ${c.req.param("hid")}`);
     }
 
-    const xml = history.findByIdWithinCap(map.id, hid);
+    const xml = await history.findByIdWithinCap(map.id, hid);
     if (xml === null) {
       throw new NotFoundError(
         `History could not be found for mapid=${map.id}, hid=${hid}`,
@@ -542,7 +542,7 @@ mapRoutes.post(
     const hid = c.req.param("hid");
 
     if (hid === "latest") {
-      const xml = history.latestXml(map.id);
+      const xml = await history.latestXml(map.id);
       // No history yet is a silent no-op in Java (`if (size > 0)`).
       if (xml !== null) {
         await mindmapService.saveDocument(map, user, xml, { minor: true });
@@ -555,7 +555,7 @@ mapRoutes.post(
       throw new BadRequestError(`Invalid history id: ${hid}`);
     }
 
-    const xml = history.findByIdWithinCap(map.id, historyId);
+    const xml = await history.findByIdWithinCap(map.id, historyId);
     if (xml === null) {
       throw new NotFoundError(
         `History could not be found for mapid=${map.id}, hid=${historyId}`,
@@ -585,11 +585,11 @@ mapRoutes.post(
       throw new BadRequestError("A label id is required.");
     }
 
-    if (labels.findByIdForAccount(labelId, user.id) === null) {
+    if ((await labels.findByIdForAccount(labelId, user.id)) === null) {
       throw new NotFoundError(`Label could not be found. Id: ${labelId}`);
     }
 
-    labels.linkToMap(map.id, labelId);
+    await labels.linkToMap(map.id, labelId);
     return c.body(null, 200);
   },
 );
@@ -599,21 +599,21 @@ mapRoutes.delete(
   "/:id/labels/:lid",
   requireUser,
   requireMapAccess("editor"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const user = currentUser(c);
     const labelId = Number(c.req.param("lid"));
 
     if (
       !Number.isInteger(labelId) ||
-      labels.findByIdForAccount(labelId, user.id) === null
+      (await labels.findByIdForAccount(labelId, user.id)) === null
     ) {
       throw new NotFoundError(
         `Label could not be found. Id: ${c.req.param("lid")}`,
       );
     }
 
-    labels.unlinkFromMap(map.id, labelId);
+    await labels.unlinkFromMap(map.id, labelId);
     return c.body(null, 204);
   },
 );
@@ -633,15 +633,18 @@ function parseCollabs(body: Record<string, unknown>): {
 } {
   const raw = Array.isArray(body.collaborations) ? body.collaborations : null;
   if (raw === null) {
-    throw new BadRequestError("A collaborations array is required.");
+    throw new BadRequestError("collaborations must be an array");
   }
 
   const collabs: ParsedCollab[] = [];
   const invalidEmails: string[] = [];
 
-  for (const entry of raw) {
-    const item = (entry ?? {}) as Record<string, unknown>;
-    const email = typeof item.email === "string" ? item.email.trim() : "";
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) {
+      throw new BadRequestError("invalid collaboration entry");
+    }
+    const email =
+      typeof item.email === "string" ? item.email.trim() : "";
     if (!EMAIL_RE.test(email)) {
       invalidEmails.push(email);
       continue;
@@ -686,8 +689,8 @@ async function resolveCollaborator(email: string): Promise<number> {
 }
 
 /** GET /maps/{id}/collabs */
-mapRoutes.get("/:id/collabs", requireUser, requireMapAccess("viewer"), (c) =>
-  c.json(toRestCollaborationList(collaborations.listForMap(currentMap(c).id))),
+mapRoutes.get("/:id/collabs", requireUser, requireMapAccess("viewer"), async (c) =>
+  c.json(toRestCollaborationList(await collaborations.listForMap(currentMap(c).id))),
 );
 
 /**
@@ -706,29 +709,41 @@ mapRoutes.post(
 
     const keep = new Set(collabs.map((x) => x.email.toLowerCase()));
 
-    // Resolve every non-owner email to an account id before the transaction
+    // Resolve every non-owner email to an account id before the batch write
     // -- resolveCollaborator may write a placeholder row, so it cannot run
-    // inside db.transaction()'s synchronous callback.
+    // inside a batch statement array.
     const resolvedIds = new Map<string, number>();
     for (const { email } of collabs) {
       if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
       resolvedIds.set(email, await resolveCollaborator(email));
     }
 
-    db.transaction(() => {
-      for (const existing of collaborations.listForMap(map.id)) {
-        if (
-          existing.role !== "owner" &&
-          !keep.has(existing.email.toLowerCase())
-        ) {
-          collaborations.deleteById(existing.id);
-        }
+    const existingCollabs = await collaborations.listForMap(map.id);
+    const statements: Statement[] = [];
+    for (const existing of existingCollabs) {
+      if (
+        existing.role !== "owner" &&
+        !keep.has(existing.email.toLowerCase())
+      ) {
+        statements.push({
+          sql: `DELETE FROM collaboration WHERE id = ?1`,
+          params: [existing.id],
+        });
       }
-      for (const { email, role } of collabs) {
-        if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
-        collaborations.upsert(map.id, resolvedIds.get(email)!, role);
-      }
-    })();
+    }
+    const now = Date.now();
+    for (const { email, role } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
+      statements.push({
+        sql: `INSERT INTO collaboration (mindmap_id, account_id, role, starred, created_at)
+              VALUES (?1, ?2, ?3, 0, ?4)
+              ON CONFLICT(mindmap_id, account_id) DO UPDATE SET role = excluded.role`,
+        params: [map.id, resolvedIds.get(email)!, role, now],
+      });
+    }
+    if (statements.length > 0) {
+      await dbAdapter.batch(statements);
+    }
 
     return c.body(null, 204);
   },
@@ -752,18 +767,26 @@ mapRoutes.put(
       resolvedIds.set(email, await resolveCollaborator(email));
     }
 
-    db.transaction(() => {
-      for (const { email, role } of collabs) {
-        if (email.toLowerCase() === map.creatorEmail.toLowerCase()) {
-          throw new ConflictError(`The user ${email} is the owner`);
-        }
-        const existing = collaborations.findByEmail(map.id, email);
-        if (existing !== null && existing.role === "owner") {
-          throw new ConflictError(`Ownership can not be modified: ${email}`);
-        }
-        collaborations.upsert(map.id, resolvedIds.get(email)!, role);
+    const statements: Statement[] = [];
+    const now = Date.now();
+    for (const { email, role } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) {
+        throw new ConflictError(`The user ${email} is the owner`);
       }
-    })();
+      const existing = await collaborations.findByEmail(map.id, email);
+      if (existing !== null && existing.role === "owner") {
+        throw new ConflictError(`Ownership can not be modified: ${email}`);
+      }
+      statements.push({
+        sql: `INSERT INTO collaboration (mindmap_id, account_id, role, starred, created_at)
+              VALUES (?1, ?2, ?3, 0, ?4)
+              ON CONFLICT(mindmap_id, account_id) DO UPDATE SET role = excluded.role`,
+        params: [map.id, resolvedIds.get(email)!, role, now],
+      });
+    }
+    if (statements.length > 0) {
+      await dbAdapter.batch(statements);
+    }
 
     return c.body(null, 204);
   },
@@ -774,7 +797,7 @@ mapRoutes.delete(
   "/:id/collabs",
   requireUser,
   requireMapAccess("owner"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const email = c.req.query("email") ?? "";
 
@@ -785,12 +808,12 @@ mapRoutes.delete(
       );
     }
 
-    const collab = collaborations.findByEmail(map.id, email);
+    const collab = await collaborations.findByEmail(map.id, email);
     if (collab !== null) {
       if (collab.role === "owner") {
         throw new ConflictError("Can not remove owner collab");
       }
-      collaborations.deleteById(collab.id);
+      await collaborations.deleteById(collab.id);
     }
     // A missing collaboration is a silent no-op, as in Java.
     return c.body(null, 204);
@@ -825,4 +848,3 @@ mapRoutes.put(
     return c.json({ email: user.email }, 200);
   },
 );
-

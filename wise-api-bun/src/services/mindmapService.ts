@@ -23,17 +23,17 @@ import type { Account, Mindmap } from "../domain/types.ts";
  * `MapPermissionsSecurityAdvice`, `ReadSecurityAdvise`, `UpdateSecurityAdvise`
  * and the 18 `@PreAuthorize` expressions.
  */
-export function hasMapPermission(
+export async function hasMapPermission(
   user: Account | null,
   map: Mindmap,
   required: Role,
-): boolean {
+): Promise<boolean> {
   if (isAdmin(user)) return true;
 
   if (user !== null) {
     if (map.creatorId === user.id) return true;
 
-    const collab = collaborations.findForMapAndAccount(map.id, user.id);
+    const collab = await collaborations.findForMapAndAccount(map.id, user.id);
     if (collab !== null && roleSatisfies(collab.role, required)) return true;
   }
 
@@ -96,7 +96,7 @@ export async function saveDocument(
   ]);
 
   if (!options.minor) {
-    history.insert(map.id, user.id, xml);
+    await history.insert(map.id, user.id, xml);
   }
 }
 
@@ -127,17 +127,17 @@ export async function removeMindmapOrLeave(
     return "deleted";
   }
 
-  const collab = collaborations.findForMapAndAccount(map.id, user.id);
+  const collab = await collaborations.findForMapAndAccount(map.id, user.id);
   if (collab !== null) {
-    collaborations.deleteById(collab.id);
+    await collaborations.deleteById(collab.id);
     return "left";
   }
   return "noop";
 }
 
 /** Per-user view state; every caller with a collaboration has one. */
-export function requireOwnCollaboration(mapId: number, user: Account) {
-  const collab = collaborations.findForMapAndAccount(mapId, user.id);
+export async function requireOwnCollaboration(mapId: number, user: Account) {
+  const collab = await collaborations.findForMapAndAccount(mapId, user.id);
   if (collab === null) {
     // Matches the Java "No enough permissions." on the starred endpoints, where
     // an admin or public-map viewer has access but no collaboration row.

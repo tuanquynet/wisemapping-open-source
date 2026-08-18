@@ -45,7 +45,7 @@ export const requireMapAccess = (required: Role) =>
       return c.json(unauthorizedBody(), 401);
     }
 
-    if (!hasMapPermission(user, map, required)) {
+    if (!(await hasMapPermission(user, map, required))) {
       throw new AccessDeniedError();
     }
 

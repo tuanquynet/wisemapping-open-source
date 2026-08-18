@@ -55,7 +55,7 @@ labelRoutes.post("/", async (c) => {
       `The title must have less than ${MAX_TITLE_LENGTH} characters.`,
     );
   }
-  if (labels.findByTitleForAccount(title, user.id) !== null) {
+  if ((await labels.findByTitleForAccount(title, user.id)) !== null) {
     throw new ValidationError(
       { title: "You already have a label with this title." },
       "You already have a label with this title.",
@@ -66,7 +66,7 @@ labelRoutes.post("/", async (c) => {
     typeof body.color === "string" && body.color !== ""
       ? body.color
       : DEFAULT_COLOR;
-  const label = labels.insert(title, color, user.id);
+  const label = await labels.insert(title, color, user.id);
 
   c.header("Location", `/api/restful/labels/${label.id}`);
   c.header("ResourceId", String(label.id));
@@ -74,8 +74,8 @@ labelRoutes.post("/", async (c) => {
 });
 
 /** GET /api/restful/labels/ -- note: `{labels: [...]}`, with no `count`. */
-labelRoutes.get("/", (c) => {
-  const list = labels.listForAccount(currentUser(c).id).map(toRestLabel);
+labelRoutes.get("/", async (c) => {
+  const list = (await labels.listForAccount(currentUser(c).id)).map(toRestLabel);
   return c.json({ labels: list });
 });
 
@@ -86,13 +86,13 @@ labelRoutes.get("/", (c) => {
  * behaviour `RestMindmapDeleteWithLabelsTest` pins. Here that falls out of
  * `ON DELETE CASCADE` on the link table.
  */
-labelRoutes.delete("/:id", (c) => {
+labelRoutes.delete("/:id", async (c) => {
   const user = currentUser(c);
   const id = Number(c.req.param("id"));
 
   if (
     !Number.isInteger(id) ||
-    labels.findByIdForAccount(id, user.id) === null
+    (await labels.findByIdForAccount(id, user.id)) === null
   ) {
     // Scoped by creator, so another user's label is indistinguishable from a
     // nonexistent one.
@@ -101,6 +101,6 @@ labelRoutes.delete("/:id", (c) => {
     );
   }
 
-  labels.deleteById(id);
+  await labels.deleteById(id);
   return c.body(null, 204);
 });

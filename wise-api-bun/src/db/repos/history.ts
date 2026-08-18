@@ -1,4 +1,4 @@
-import { db } from "../client.ts";
+import { dbAdapter } from "../client.ts";
 import type { MindmapHistoryRow } from "../rows.ts";
 import { decodeXml, encodeXml } from "../../domain/mindmapXml.ts";
 
@@ -10,6 +10,9 @@ import { decodeXml, encodeXml } from "../../domain/mindmapXml.ts";
  * linear-scans that same capped list, which means an older entry is unreachable
  * by id even though it still exists in the table. Both behaviours are reproduced;
  * see `findByIdWithinCap`.
+ *
+ * Every function here is `async`, going through `dbAdapter` (Task 1.1,
+ * tasks/plan.md) rather than the raw `bun:sqlite` `Database` (Task 4.1).
  */
 export const HISTORY_LIMIT = 30;
 
@@ -36,18 +39,17 @@ function toEntry(row: HistoryListRow): HistoryEntry {
 }
 
 /** Newest first, capped -- covered exactly by `ix_history_map_created`. */
-export function listForMap(mindmapId: number): HistoryEntry[] {
-  return db
-    .query<HistoryListRow, [number, number]>(
-      `SELECT h.*, editor.email AS editor_email
-       FROM   mindmap_history h
-       JOIN   account editor ON editor.id = h.editor_id
-       WHERE  h.mindmap_id = ?1
-       ORDER  BY h.created_at DESC, h.id DESC
-       LIMIT  ?2`,
-    )
-    .all(mindmapId, HISTORY_LIMIT)
-    .map(toEntry);
+export async function listForMap(mindmapId: number): Promise<HistoryEntry[]> {
+  const rows = await dbAdapter.all<HistoryListRow>(
+    `SELECT h.*, editor.email AS editor_email
+     FROM   mindmap_history h
+     JOIN   account editor ON editor.id = h.editor_id
+     WHERE  h.mindmap_id = ?1
+     ORDER  BY h.created_at DESC, h.id DESC
+     LIMIT  ?2`,
+    [mindmapId, HISTORY_LIMIT],
+  );
+  return rows.map(toEntry);
 }
 
 /**
@@ -57,46 +59,48 @@ export function listForMap(mindmapId: number): HistoryEntry[] {
  * produces. Querying the row directly would make older revisions reachable that
  * the current API cannot return.
  */
-export function findByIdWithinCap(
+export async function findByIdWithinCap(
   mindmapId: number,
   historyId: number,
-): string | null {
-  const row = db
-    .query<{ id: number; xml: string }, [number, number]>(
-      `SELECT id, xml FROM mindmap_history
-       WHERE  mindmap_id = ?1
-       ORDER  BY created_at DESC, id DESC
-       LIMIT  ?2`,
-    )
-    .all(mindmapId, HISTORY_LIMIT)
-    .find((r) => r.id === historyId);
+): Promise<string | null> {
+  const rows = await dbAdapter.all<{ id: number; xml: string }>(
+    `SELECT id, xml FROM mindmap_history
+     WHERE  mindmap_id = ?1
+     ORDER  BY created_at DESC, id DESC
+     LIMIT  ?2`,
+    [mindmapId, HISTORY_LIMIT],
+  );
+  const row = rows.find((r) => r.id === historyId);
   return row === undefined ? null : decodeXml(row.xml);
 }
 
 /** The newest entry's XML, for reverting to `"latest"`. */
-export function latestXml(mindmapId: number): string | null {
-  const row = db
-    .query<{ xml: string }, [number]>(
-      `SELECT xml FROM mindmap_history
-       WHERE  mindmap_id = ?1
-       ORDER  BY created_at DESC, id DESC
-       LIMIT  1`,
-    )
-    .get(mindmapId);
+export async function latestXml(mindmapId: number): Promise<string | null> {
+  const row = await dbAdapter.get<{ xml: string }>(
+    `SELECT xml FROM mindmap_history
+     WHERE  mindmap_id = ?1
+     ORDER  BY created_at DESC, id DESC
+     LIMIT  1`,
+    [mindmapId],
+  );
   return row == null ? null : decodeXml(row.xml);
 }
 
-export function insert(mindmapId: number, editorId: number, xml: string): void {
-  db.run(
+export async function insert(
+  mindmapId: number,
+  editorId: number,
+  xml: string,
+): Promise<void> {
+  await dbAdapter.run(
     `INSERT INTO mindmap_history (mindmap_id, editor_id, xml, created_at) VALUES (?1, ?2, ?3, ?4)`,
     [mindmapId, editorId, encodeXml(xml), Date.now()],
   );
 }
 
-export function countForMap(mindmapId: number): number {
-  return db
-    .query<{ n: number }, [number]>(
-      `SELECT COUNT(*) AS n FROM mindmap_history WHERE mindmap_id = ?1`,
-    )
-    .get(mindmapId)!.n;
+export async function countForMap(mindmapId: number): Promise<number> {
+  const row = await dbAdapter.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM mindmap_history WHERE mindmap_id = ?1`,
+    [mindmapId],
+  );
+  return row!.n;
 }
