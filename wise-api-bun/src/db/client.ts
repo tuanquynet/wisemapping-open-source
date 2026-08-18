@@ -3,6 +3,8 @@ import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 
 import { config } from "../config.ts";
+import type { DbAdapter } from "./adapter.ts";
+import { createBunAdapter } from "./bunAdapter.ts";
 import { migrate } from "./migrate.ts";
 
 /**
@@ -35,3 +37,12 @@ export function openDatabase(path: string): Database {
 }
 
 export const db = openDatabase(config.dbPath);
+
+/**
+ * The same connection as `db`, exposed through the async `DbAdapter`
+ * interface. Repos, services, middleware, and routes migrate to this export
+ * in Phase 2+ of the Cloudflare port (tasks/plan.md); `db` above keeps
+ * serving every unconverted call site unchanged in the meantime, so this is
+ * a pure addition, not a replacement.
+ */
+export const dbAdapter: DbAdapter = createBunAdapter(db);
