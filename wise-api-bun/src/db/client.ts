@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 
-import { config } from "../config.ts";
+import { config } from "../config.bun.ts";
 import type { DbAdapter } from "./adapter.ts";
 import { createBunAdapter } from "./bunAdapter.ts";
 import { migrate } from "./migrate.ts";

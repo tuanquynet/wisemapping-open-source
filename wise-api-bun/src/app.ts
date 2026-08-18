@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
-import { config } from "./config.ts";
+import { config } from "./config.bun.ts";
 import { errorHandler } from "./http/middleware/errorHandler.ts";
 import { jwt } from "./http/middleware/jwt.ts";
 import { accountRoutes } from "./http/routes/account.ts";

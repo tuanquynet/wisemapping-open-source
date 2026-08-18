@@ -1,6 +1,6 @@
 import { sign, verify } from "hono/jwt";
 
-import { config } from "../config.ts";
+import { config } from "../config.bun.ts";
 import { logger } from "./logger.ts";
 
 /**

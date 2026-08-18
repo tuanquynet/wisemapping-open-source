@@ -7,7 +7,7 @@ import * as labels from "../../db/repos/labels.ts";
 import * as mindmaps from "../../db/repos/mindmaps.ts";
 import * as lockManager from "../../services/lockManager.ts";
 import * as mindmapService from "../../services/mindmapService.ts";
-import { config } from "../../config.ts";
+import { config } from "../../config.bun.ts";
 import { db } from "../../db/client.ts";
 import { accepts, parseFilter } from "../../domain/mindmapFilter.ts";
 import { defaultMindmapXml } from "../../domain/mindmapXml.ts";

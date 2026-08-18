@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { config } from "../src/config.ts";
+import { config } from "../src/config.bun.ts";
 import { API, get } from "./helpers/client.ts";
 
 /**

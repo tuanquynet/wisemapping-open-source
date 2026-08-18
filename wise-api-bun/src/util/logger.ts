@@ -1,4 +1,5 @@
-import { config, type LogLevel } from "../config.ts";
+import { config } from "../config.bun.ts";
+import type { LogLevel } from "../config.ts";
 
 const rank: Record<LogLevel, number> = {
   silent: 0,
