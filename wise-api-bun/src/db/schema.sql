@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS mindmap (
   creator_id     INTEGER NOT NULL REFERENCES account (id) ON DELETE CASCADE,
   last_editor_id INTEGER NOT NULL REFERENCES account (id),
   created_at     INTEGER NOT NULL,
-  edited_at      INTEGER NOT NULL
+  edited_at      INTEGER NOT NULL,
+  source_type    TEXT    NOT NULL DEFAULT 'local' CHECK (source_type IN ('local', 'gdrive')),
+  source_id      TEXT
 ) STRICT;
 
 -- MapInfoValidator rejects a duplicate title for the same creator; make the
@@ -74,6 +76,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_mindmap_creator_title
   ON mindmap (creator_id, title);
 CREATE INDEX IF NOT EXISTS ix_mindmap_creator
   ON mindmap (creator_id);
+CREATE INDEX IF NOT EXISTS ix_mindmap_source
+  ON mindmap (creator_id, source_type, source_id);
 
 -- ===========================================================================
 -- mindmap_xml -- separate table so `SELECT ... FROM mindmap` never reads

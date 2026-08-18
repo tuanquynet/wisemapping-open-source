@@ -29,6 +29,8 @@ export interface RestMindmap {
   xml: string;
   properties: string;
   starred: boolean;
+  sourceType?: "local" | "gdrive";
+  sourceId?: string | null;
 }
 
 export function toRestMindmap(
@@ -52,8 +54,11 @@ export function toRestMindmap(
     xml,
     properties,
     starred,
+    sourceType: map.sourceType,
+    sourceId: map.sourceId,
   };
 }
+
 
 /**
  * `rest/model/RestMindmapInfo.java` -- one entry in the list response.
@@ -80,6 +85,8 @@ export interface RestMindmapInfo {
   spamDetected: boolean;
   starred: boolean;
   labels: RestLabel[];
+  sourceType?: "local" | "gdrive";
+  sourceId?: string | null;
 }
 
 export function toRestMindmapInfo(
@@ -99,6 +106,8 @@ export function toRestMindmapInfo(
     spamDetected: false,
     starred: map.myStarred,
     labels: labels.map(toRestLabel),
+    sourceType: map.sourceType,
+    sourceId: map.sourceId,
   };
 }
 

@@ -28,6 +28,8 @@ function toMindmap(row: MindmapRow): Mindmap {
     lastEditorId: row.last_editor_id,
     createdAt: new Date(row.created_at),
     editedAt: new Date(row.edited_at),
+    sourceType: row.source_type ?? "local",
+    sourceId: row.source_id ?? null,
   };
 }
 
@@ -78,6 +80,19 @@ export function findByCreatorAndTitle(
     .get(creatorId, title);
   return row == null ? null : toMindmap(row);
 }
+export function findByCreatorAndSource(
+  creatorId: number,
+  sourceType: string,
+  sourceId: string,
+): Mindmap | null {
+  const row = db
+    .query<MindmapRow, [number, string, string]>(
+      `SELECT * FROM mindmap WHERE creator_id = ?1 AND source_type = ?2 AND source_id = ?3`,
+    )
+    .get(creatorId, sourceType, sourceId);
+  return row == null ? null : toMindmap(row);
+}
+
 
 export interface ListedMindmap extends MindmapWithPeople {
   myRole: Role;
@@ -126,6 +141,8 @@ export interface NewMindmap {
   description: string | null;
   creatorId: number;
   isPublic: boolean;
+  sourceType?: "local" | "gdrive";
+  sourceId?: string | null;
 }
 
 /**
@@ -136,10 +153,12 @@ export interface NewMindmap {
 export function insert(input: NewMindmap, xml: string): Mindmap {
   return db.transaction(() => {
     const now = Date.now();
+    const sourceType = input.sourceType ?? "local";
+    const sourceId = input.sourceId ?? null;
     const row = db
-      .query<MindmapRow, [string, string | null, number, number, number]>(
-        `INSERT INTO mindmap (title, description, is_public, creator_id, last_editor_id, created_at, edited_at)
-         VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?5)
+      .query<MindmapRow, [string, string | null, number, number, number, string, string | null]>(
+        `INSERT INTO mindmap (title, description, is_public, creator_id, last_editor_id, created_at, edited_at, source_type, source_id)
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?5, ?6, ?7)
          RETURNING *`,
       )
       .get(
@@ -148,6 +167,8 @@ export function insert(input: NewMindmap, xml: string): Mindmap {
         input.isPublic ? 1 : 0,
         input.creatorId,
         now,
+        sourceType,
+        sourceId,
       )!;
 
     db.run(`INSERT INTO mindmap_xml (mindmap_id, xml) VALUES (?1, ?2)`, [

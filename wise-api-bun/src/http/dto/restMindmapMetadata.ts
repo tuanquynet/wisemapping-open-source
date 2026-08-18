@@ -28,7 +28,10 @@ export interface RestMindmapMetadata {
   lastModificationTime: string;
   public: boolean;
   xml?: string;
+  sourceType?: "local" | "gdrive";
+  sourceId?: string | null;
 }
+
 
 export interface MetadataInput {
   map: MindmapWithPeople;
@@ -62,8 +65,9 @@ export function toRestMindmapMetadata(
     lastModificationBy: map.lastEditorEmail,
     lastModificationTime: toIso8601(map.editedAt),
     public: map.isPublic,
+    sourceType: map.sourceType,
+    sourceId: map.sourceId,
   };
-
   // Only present when ?xml=true, as in the Java handler.
   if (input.xml !== undefined) result.xml = input.xml;
 

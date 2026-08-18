@@ -30,6 +30,8 @@ export interface Mindmap {
   lastEditorId: number;
   createdAt: Date;
   editedAt: Date;
+  sourceType: "local" | "gdrive";
+  sourceId: string | null;
 }
 
 /**

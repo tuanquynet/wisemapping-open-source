@@ -30,6 +30,8 @@ export interface MindmapRow {
   last_editor_id: number;
   created_at: number;
   edited_at: number;
+  source_type: "local" | "gdrive";
+  source_id: string | null;
 }
 
 export interface MindmapHistoryRow {

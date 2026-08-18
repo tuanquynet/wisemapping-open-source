@@ -11,7 +11,6 @@ import schemaSql from "./schema.sql" with { type: "text" };
  */
 const steps: readonly { readonly description: string; readonly sql: string }[] =
   [{ description: "base schema", sql: schemaSql }];
-
 export function migrate(db: Database): void {
   const current = db
     .query<{ user_version: number }, []>("PRAGMA user_version")

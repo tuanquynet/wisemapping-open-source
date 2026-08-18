@@ -138,28 +138,72 @@ mapRoutes.get("/", requireUser, (c) => {
 });
 
 /**
- * POST /maps?title=&description=&layout=
+ * POST /maps?title=&description=&layout=&sourceType=&sourceId=
  *
- * Body is the optional raw XML; `consumes` in Java is `application/xml` or
- * `application/json`, and the body is bound as a raw String either way -- it is
- * never parsed as JSON.
+ * Body is the optional raw XML or JSON; supports creating local maps or registering
+ * Google Drive linked maps without duplicating map XML in the database.
  */
 mapRoutes.post("/", requireUser, async (c) => {
   const user = currentUser(c);
 
-  const title = mindmapService.requireTitle(c.req.query("title"));
-  const description = c.req.query("description") ?? null;
+  const queryTitle = c.req.query("title");
+  const queryDesc = c.req.query("description");
+  const querySourceType = c.req.query("sourceType");
+  const querySourceId = c.req.query("sourceId");
   const layout = c.req.query("layout") ?? "mindmap";
 
-  mindmapService.assertTitleAvailable(user.id, title);
+  const bodyText = (await c.req.text()).trim();
+  let jsonBody: Record<string, unknown> | null = null;
+  if (bodyText.startsWith("{") && bodyText.endsWith("}")) {
+    try {
+      jsonBody = JSON.parse(bodyText) as Record<string, unknown>;
+    } catch {
+      jsonBody = null;
+    }
+  }
 
-  const body = (await c.req.text()).trim();
-  const xml = mindmapService.validateAndNormalizeXml(
-    body === "" ? defaultMindmapXml(title, layout) : body,
-  );
+  const titleRaw = queryTitle || (jsonBody && typeof jsonBody.title === "string" ? jsonBody.title : undefined);
+  const title = mindmapService.requireTitle(titleRaw);
+  const description = queryDesc ?? (jsonBody && typeof jsonBody.description === "string" ? jsonBody.description : null);
+  const rawSourceType = querySourceType || (jsonBody && typeof jsonBody.sourceType === "string" ? jsonBody.sourceType : "local");
+  const sourceType = rawSourceType === "gdrive" ? "gdrive" : "local";
+  const sourceId = querySourceId || (jsonBody && typeof jsonBody.sourceId === "string" ? jsonBody.sourceId : null);
+
+  if (sourceType === "gdrive" && sourceId) {
+    const existing = mindmaps.findByCreatorAndSource(user.id, "gdrive", sourceId);
+    if (existing) {
+      if (title && existing.title !== title) {
+        try {
+          mindmaps.updateTitle(existing.id, title);
+        } catch {
+          // duplicate title ignored on update
+        }
+      }
+      mindmaps.touch(existing.id, user.id);
+      c.header("Location", `/api/restful/maps/${existing.id}`);
+      c.header("ResourceId", String(existing.id));
+      return c.body(null, 201);
+    }
+  }
+
+  let finalTitle = title;
+  const existingTitleMap = mindmaps.findByCreatorAndTitle(user.id, title);
+  if (existingTitleMap) {
+    if (sourceType === "gdrive") {
+      finalTitle = `${title} (Google Drive)`;
+      if (mindmaps.findByCreatorAndTitle(user.id, finalTitle)) {
+        finalTitle = `${title} (${sourceId ? sourceId.substring(0, 6) : Date.now()})`;
+      }
+    } else {
+      mindmapService.assertTitleAvailable(user.id, title);
+    }
+  }
+
+  const xmlContent = bodyText !== "" && !jsonBody ? bodyText : defaultMindmapXml(finalTitle, layout);
+  const xml = mindmapService.validateAndNormalizeXml(xmlContent);
 
   const map = mindmaps.insert(
-    { title, description, creatorId: user.id, isPublic: false },
+    { title: finalTitle, description, creatorId: user.id, isPublic: false, sourceType, sourceId },
     xml,
   );
 

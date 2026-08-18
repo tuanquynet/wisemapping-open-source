@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { config } from "../src/config.ts";
 import { API, get } from "./helpers/client.ts";
 
 /**
@@ -15,8 +16,8 @@ describe("GET /app/config", () => {
 
     const body = await res.json();
     expect(body).toEqual({
-      apiBaseUrl: "http://localhost:8080",
-      uiBaseUrl: "http://localhost:3000",
+      apiBaseUrl: config.apiBaseUrl,
+      uiBaseUrl: config.uiBaseUrl,
       googleOauth2Enabled: false,
       facebookOauth2Enabled: false,
       registrationEnabled: true,
