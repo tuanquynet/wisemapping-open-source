@@ -43,11 +43,11 @@ authRoutes.post("/authenticate", async (c) => {
  * It exists so the client has a single call to make, and so held edit locks can
  * be released.
  */
-authRoutes.post("/logout", (c) => {
+authRoutes.post("/logout", async (c) => {
   // Release any edit locks this user holds, replacing the Java
   // listener/UnlockOnExpireListener. Without this a signed-out user's lock
   // blocks other editors for up to the full 30-minute TTL.
   const user = c.get("user");
-  if (user !== null) lockManager.unlockAll(user);
+  if (user !== null) await lockManager.unlockAll(user);
   return c.body(null, 200);
 });

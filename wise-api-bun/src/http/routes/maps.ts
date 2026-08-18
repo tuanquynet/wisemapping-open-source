@@ -274,7 +274,7 @@ mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), async (c) => {
     user === null ? null : await collaborations.findForMapAndAccount(map.id, user.id);
 
   // The holder sees their own lock as absent; only another user's name appears.
-  const lock = lockManager.getLockInfo(map.id);
+  const lock = await lockManager.getLockInfo(map.id);
   const lockedByFullName =
     lock !== null && (user === null || lock.userId !== user.id)
       ? lock.userFullName
@@ -340,7 +340,7 @@ mapRoutes.put(
       throw new BadRequestError("Map properties can not be null");
     }
 
-    lockManager.lock(map, user);
+    await lockManager.lock(map, user);
 
     const xml = mindmapService.validateAndNormalizeXml(body.xml);
     const minor = c.req.query("minor") === "true";
@@ -840,11 +840,11 @@ mapRoutes.put(
     const wantsLock = (await c.req.text()).trim().toLowerCase() === "true";
 
     if (!wantsLock) {
-      lockManager.unlock(map, user);
+      await lockManager.unlock(map, user);
       return c.body(null, 204);
     }
 
-    lockManager.lock(map, user);
+    await lockManager.lock(map, user);
     return c.json({ email: user.email }, 200);
   },
 );

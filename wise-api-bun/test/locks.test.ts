@@ -74,7 +74,7 @@ describe("PUT /maps/{id}/lock", () => {
       text: "true",
       headers: user.authHeaders,
     });
-    const before = lockManager.getLockInfo(id)!.expiresAt;
+    const before = (await lockManager.getLockInfo(id))!.expiresAt;
 
     await Bun.sleep(5);
     await put(`${API}/maps/${id}/lock`, {
@@ -83,7 +83,7 @@ describe("PUT /maps/{id}/lock", () => {
     });
     // The lock is a lease; every call extends it, which is how the editor's
     // save heartbeat keeps a session alive.
-    expect(lockManager.getLockInfo(id)!.expiresAt).toBeGreaterThan(before);
+    expect((await lockManager.getLockInfo(id))!.expiresAt).toBeGreaterThan(before);
   });
 
   test("another editor may take the lock once it expires", async () => {
@@ -176,7 +176,7 @@ describe("PUT /maps/{id}/lock", () => {
       json: { xml: SAMPLE_XML, properties: "{}" },
     });
 
-    expect(lockManager.getLockInfo(id)?.userId).toBeDefined();
+    expect((await lockManager.getLockInfo(id))?.userId).toBeDefined();
     // The other editor is now blocked.
     expect(
       (
@@ -200,7 +200,7 @@ describe("PUT /maps/{id}/lock", () => {
     });
     expect(res.status).toBe(403);
     // The lock is taken inside the handler, after the permission middleware.
-    expect(lockManager.getLockInfo(id)).toBeNull();
+    expect(await lockManager.getLockInfo(id)).toBeNull();
   });
 });
 
@@ -259,16 +259,16 @@ describe("logout releases locks", () => {
       text: "true",
       headers: owner.authHeaders,
     });
-    expect(lockManager.getLockInfo(a)).not.toBeNull();
-    expect(lockManager.getLockInfo(b)).not.toBeNull();
+    expect(await lockManager.getLockInfo(a)).not.toBeNull();
+    expect(await lockManager.getLockInfo(b)).not.toBeNull();
 
     expect(
       (await post(`${API}/logout`, { headers: owner.authHeaders })).status,
     ).toBe(200);
 
     // Without this, a signed-out user's lock would block others for 30 minutes.
-    expect(lockManager.getLockInfo(a)).toBeNull();
-    expect(lockManager.getLockInfo(b)).toBeNull();
+    expect(await lockManager.getLockInfo(a)).toBeNull();
+    expect(await lockManager.getLockInfo(b)).toBeNull();
     expect(
       (
         await put(`${API}/maps/${a}/lock`, {
@@ -291,14 +291,14 @@ describe("logout releases locks", () => {
     });
     await post(`${API}/logout`, { headers: owner.authHeaders });
 
-    expect(lockManager.getLockInfo(id)?.userId).toBe(
+    expect((await lockManager.getLockInfo(id))?.userId).toBe(
       (await json(get(`${API}/account`, { headers: editor.authHeaders }))).id,
     );
   });
 });
 
 describe("lock manager internals", () => {
-  test("the session id is a string, not a number", () => {
+  test("the session id is a string, not a number", async () => {
     // Bun.nanoseconds() exceeds Number.MAX_SAFE_INTEGER within hours of uptime,
     // and this value is serialised to the client.
     const map = { id: 1 } as never;
@@ -309,7 +309,7 @@ describe("lock manager internals", () => {
       lastname: "B",
     } as never;
 
-    const info = lockManager.lock(map, user);
+    const info = await lockManager.lock(map, user);
     expect(typeof info.session).toBe("string");
     lockManager.clearAll();
   });
