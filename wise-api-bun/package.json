@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "hash-wasm": "^4.12.0",
     "hono": "^4.6.14"
   },
   "devDependencies": {
