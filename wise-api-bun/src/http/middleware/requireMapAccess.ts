@@ -32,7 +32,7 @@ export const requireMapAccess = (required: Role) =>
       throw new BadRequestError(`Invalid map id: ${raw}`);
     }
 
-    const map = mindmaps.findById(id);
+    const map = await mindmaps.findById(id);
     if (map === null) {
       throw new MapNotFoundError(id);
     }

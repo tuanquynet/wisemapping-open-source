@@ -81,6 +81,30 @@ describe("createBunAdapter", () => {
     expect(rows.map((r) => r.email_lower)).toEqual(["a@x.com", "b@x.com"]);
   });
 
+  test("batch returns each statement's RETURNING rows, in order, mirroring D1's batch() shape", async () => {
+    // Task 3.1 needs this: mindmaps.insert() creates a mindmap row, then an
+    // xml row and an owner-collaboration row referencing it, atomically, and
+    // must hand the created Mindmap back to its caller. Confirmed D1's real
+    // batch() returns one D1Result per statement with a `.results` array
+    // populated from RETURNING (empty for statements without one) -- this
+    // adapter must return the equivalent shape.
+    const adapter = createBunAdapter(freshDb());
+
+    const results = await adapter.batch<AccountRow>([
+      {
+        sql: `${INSERT_ACCOUNT_SQL} RETURNING email, email_lower, created_at`,
+        params: ["a@x.com", "a@x.com", 1],
+      },
+      { sql: INSERT_ACCOUNT_SQL, params: ["b@x.com", "b@x.com", 2] },
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toEqual([
+      { email: "a@x.com", email_lower: "a@x.com", created_at: 1 },
+    ]);
+    expect(results[1]).toEqual([]);
+  });
+
   test("batch rolls back every statement, including earlier valid ones, when one fails", async () => {
     const adapter = createBunAdapter(freshDb());
 

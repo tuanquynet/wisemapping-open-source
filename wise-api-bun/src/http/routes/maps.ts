@@ -12,7 +12,10 @@ import { db } from "../../db/client.ts";
 import { accepts, parseFilter } from "../../domain/mindmapFilter.ts";
 import { defaultMindmapXml } from "../../domain/mindmapXml.ts";
 import { parseRole } from "../../domain/roles.ts";
-import { DEFAULT_MINDMAP_PROPERTIES } from "../../domain/types.ts";
+import {
+  DEFAULT_MINDMAP_PROPERTIES,
+  type MindmapWithPeople,
+} from "../../domain/types.ts";
 import {
   AccessDeniedError,
   BadRequestError,
@@ -70,7 +73,7 @@ function viewState(
  * as AccessDeniedSecurityException, so a bad id and a permission failure are
  * indistinguishable. One transaction here, so a partial batch cannot commit.
  */
-mapRoutes.delete("/batch", requireUser, (c) => {
+mapRoutes.delete("/batch", requireUser, async (c) => {
   const user = currentUser(c);
   const raw = c.req.query("ids");
   if (raw === undefined || raw === "") {
@@ -82,29 +85,35 @@ mapRoutes.delete("/batch", requireUser, (c) => {
     throw new BadRequestError(`Invalid map ids: ${raw}`);
   }
 
-  db.transaction(() => {
-    for (const id of ids) {
-      const map = mindmaps.findById(id);
-      if (map === null)
-        throw new NotFoundError(`Map with id ${id} could not be found.`);
-      // Deletion requires only READ, as in MindmapServiceImpl.removeMindmap.
-      if (!mindmapService.hasMapPermission(user, map, "viewer")) {
-        throw new AccessDeniedError(`Maps could not be deleted: ${raw}`);
-      }
-      mindmapService.removeMindmapOrLeave(map, user);
+  // Pre-validate all maps and permissions BEFORE any deletion, preserving
+  // the property that a bad id or permission failure deletes nothing.
+  const mapsToDelete: MindmapWithPeople[] = [];
+  for (const id of ids) {
+    const map = await mindmaps.findById(id);
+    if (map === null) {
+      throw new NotFoundError(`Map with id ${id} could not be found.`);
     }
-  })();
+    // Deletion requires only READ, as in MindmapServiceImpl.removeMindmap.
+    if (!mindmapService.hasMapPermission(user, map, "viewer")) {
+      throw new AccessDeniedError(`Maps could not be deleted: ${raw}`);
+    }
+    mapsToDelete.push(map);
+  }
+
+  for (const map of mapsToDelete) {
+    await mindmapService.removeMindmapOrLeave(map, user);
+  }
 
   return c.body(null, 204);
 });
 
 /** GET /maps/ -- the caller's maps, filtered by `?q=`. */
-mapRoutes.get("/", requireUser, (c) => {
+mapRoutes.get("/", requireUser, async (c) => {
   const user = currentUser(c);
 
   // The 500-map cap is applied BEFORE filtering, matching the Java order, so a
   // filter can return fewer results than actually match.
-  const all = mindmaps.listForAccount(user.id, config.mapListMaxSize);
+  const all = await mindmaps.listForAccount(user.id, config.mapListMaxSize);
 
   const labelRows = labels.listForMaps(
     all.map((m) => m.id),
@@ -170,16 +179,16 @@ mapRoutes.post("/", requireUser, async (c) => {
   const sourceId = querySourceId || (jsonBody && typeof jsonBody.sourceId === "string" ? jsonBody.sourceId : null);
 
   if (sourceType === "gdrive" && sourceId) {
-    const existing = mindmaps.findByCreatorAndSource(user.id, "gdrive", sourceId);
+    const existing = await mindmaps.findByCreatorAndSource(user.id, "gdrive", sourceId);
     if (existing) {
       if (title && existing.title !== title) {
         try {
-          mindmaps.updateTitle(existing.id, title);
+          await mindmaps.updateTitle(existing.id, title);
         } catch {
           // duplicate title ignored on update
         }
       }
-      mindmaps.touch(existing.id, user.id);
+      await mindmaps.touch(existing.id, user.id);
       c.header("Location", `/api/restful/maps/${existing.id}`);
       c.header("ResourceId", String(existing.id));
       return c.body(null, 201);
@@ -187,22 +196,22 @@ mapRoutes.post("/", requireUser, async (c) => {
   }
 
   let finalTitle = title;
-  const existingTitleMap = mindmaps.findByCreatorAndTitle(user.id, title);
+  const existingTitleMap = await mindmaps.findByCreatorAndTitle(user.id, title);
   if (existingTitleMap) {
     if (sourceType === "gdrive") {
       finalTitle = `${title} (Google Drive)`;
-      if (mindmaps.findByCreatorAndTitle(user.id, finalTitle)) {
+      if (await mindmaps.findByCreatorAndTitle(user.id, finalTitle)) {
         finalTitle = `${title} (${sourceId ? sourceId.substring(0, 6) : Date.now()})`;
       }
     } else {
-      mindmapService.assertTitleAvailable(user.id, title);
+      await mindmapService.assertTitleAvailable(user.id, title);
     }
   }
 
   const xmlContent = bodyText !== "" && !jsonBody ? bodyText : defaultMindmapXml(finalTitle, layout);
   const xml = mindmapService.validateAndNormalizeXml(xmlContent);
 
-  const map = mindmaps.insert(
+  const map = await mindmaps.insert(
     { title: finalTitle, description, creatorId: user.id, isPublic: false, sourceType, sourceId },
     xml,
   );
@@ -236,14 +245,14 @@ mapRoutes.post("/validate-note", requireUser, async (c) => {
 // ---------------------------------------------------------------------------
 
 /** GET /maps/{id} -- note: no `public` or `spamDetected` key. See restMindmap.ts. */
-mapRoutes.get("/:id", requireUser, requireMapAccess("viewer"), (c) => {
+mapRoutes.get("/:id", requireUser, requireMapAccess("viewer"), async (c) => {
   const map = currentMap(c);
   const user = currentUser(c);
   const state = viewState(map.id, user.id);
   return c.json(
     toRestMindmap(
       map,
-      mindmapService.readXml(map.id),
+      await mindmapService.readXml(map.id),
       state.properties,
       state.starred,
     ),
@@ -257,7 +266,7 @@ mapRoutes.get("/:id", requireUser, requireMapAccess("viewer"), (c) => {
  * exactly that, since the permission predicate grants viewer access to a public
  * map for a null user.
  */
-mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), (c) => {
+mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), async (c) => {
   const map = currentMap(c);
   const user = c.get("user");
 
@@ -272,6 +281,7 @@ mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), (c) => {
       : null;
 
   const wantsXml = c.req.query("xml") === "true";
+  const xml = wantsXml ? await mindmapService.readXml(map.id) : undefined;
 
   return c.json(
     toRestMindmapMetadata({
@@ -279,15 +289,15 @@ mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), (c) => {
       properties: collab?.mindmapProperties ?? DEFAULT_MINDMAP_PROPERTIES,
       role: collab?.role ?? null,
       lockedByFullName,
-      ...(wantsXml && { xml: mindmapService.readXml(map.id) }),
+      ...(xml !== undefined && { xml }),
     }),
   );
 });
 
 /** GET /maps/{id}/document/xml and /xml-pub -- public, raw XML body. */
 for (const path of ["/:id/document/xml", "/:id/document/xml-pub"] as const) {
-  mapRoutes.get(path, requireMapAccess("viewer"), (c) =>
-    c.body(mindmapService.readXml(currentMap(c).id), 200, {
+  mapRoutes.get(path, requireMapAccess("viewer"), async (c) =>
+    c.body(await mindmapService.readXml(currentMap(c).id), 200, {
       "Content-Type": XML_CONTENT_TYPE,
     }),
   );
@@ -306,7 +316,7 @@ mapRoutes.put(
   async (c) => {
     const map = currentMap(c);
     const xml = mindmapService.validateAndNormalizeXml(await c.req.text());
-    mindmapService.saveDocument(map, currentUser(c), xml, { minor: false });
+    await mindmapService.saveDocument(map, currentUser(c), xml, { minor: false });
     return c.body(null, 200);
   },
 );
@@ -335,14 +345,12 @@ mapRoutes.put(
     const xml = mindmapService.validateAndNormalizeXml(body.xml);
     const minor = c.req.query("minor") === "true";
 
-    db.transaction(() => {
-      collaborations.updateProperties(
-        map.id,
-        user.id,
-        body.properties as string,
-      );
-      mindmapService.saveDocument(map, user, xml, { minor });
-    })();
+    collaborations.updateProperties(
+      map.id,
+      user.id,
+      body.properties as string,
+    );
+    await mindmapService.saveDocument(map, user, xml, { minor });
 
     return c.body(null, 204);
   },
@@ -359,22 +367,20 @@ mapRoutes.put("/:id", requireUser, requireMapAccess("editor"), async (c) => {
   const xml =
     typeof body.xml === "string" && body.xml !== ""
       ? mindmapService.validateAndNormalizeXml(body.xml)
-      : mindmapService.readXml(map.id);
+      : await mindmapService.readXml(map.id);
 
-  db.transaction(() => {
-    if (typeof body.title === "string" && body.title !== map.title) {
-      const title = mindmapService.requireTitle(body.title);
-      mindmapService.assertTitleAvailable(user.id, title, map.id);
-      mindmaps.updateTitle(map.id, title);
-    }
-    if (typeof body.description === "string") {
-      mindmaps.updateDescription(map.id, body.description);
-    }
-    if (typeof body.properties === "string") {
-      collaborations.updateProperties(map.id, user.id, body.properties);
-    }
-    mindmapService.saveDocument(map, user, xml, { minor });
-  })();
+  if (typeof body.title === "string" && body.title !== map.title) {
+    const title = mindmapService.requireTitle(body.title);
+    await mindmapService.assertTitleAvailable(user.id, title, map.id);
+    await mindmaps.updateTitle(map.id, title);
+  }
+  if (typeof body.description === "string") {
+    await mindmaps.updateDescription(map.id, body.description);
+  }
+  if (typeof body.properties === "string") {
+    collaborations.updateProperties(map.id, user.id, body.properties);
+  }
+  await mindmapService.saveDocument(map, user, xml, { minor });
 
   return c.body(null, 204);
 });
@@ -389,8 +395,8 @@ mapRoutes.put(
     const user = currentUser(c);
     const title = mindmapService.requireTitle(await c.req.text());
 
-    mindmapService.assertTitleAvailable(user.id, title, map.id);
-    mindmaps.updateTitle(map.id, title);
+    await mindmapService.assertTitleAvailable(user.id, title, map.id);
+    await mindmaps.updateTitle(map.id, title);
     return c.body(null, 204);
   },
 );
@@ -401,7 +407,7 @@ mapRoutes.put(
   requireUser,
   requireMapAccess("editor"),
   async (c) => {
-    mindmaps.updateDescription(currentMap(c).id, await c.req.text());
+    await mindmaps.updateDescription(currentMap(c).id, await c.req.text());
     return c.body(null, 204);
   },
 );
@@ -416,7 +422,7 @@ mapRoutes.put(
     if (typeof body.isPublic !== "boolean") {
       throw new BadRequestError("Map properties can not be null");
     }
-    mindmaps.updatePublic(currentMap(c).id, body.isPublic);
+    await mindmaps.updatePublic(currentMap(c).id, body.isPublic);
     return c.body(null, 204);
   },
 );
@@ -427,8 +433,8 @@ mapRoutes.put(
  * Requires only viewer: the creator deletes the map, anyone else leaves it. This
  * is the Java behaviour and the frontend's "remove from my list" action.
  */
-mapRoutes.delete("/:id", requireUser, requireMapAccess("viewer"), (c) => {
-  mindmapService.removeMindmapOrLeave(currentMap(c), currentUser(c));
+mapRoutes.delete("/:id", requireUser, requireMapAccess("viewer"), async (c) => {
+  await mindmapService.removeMindmapOrLeave(currentMap(c), currentUser(c));
   return c.body(null, 204);
 });
 
@@ -439,13 +445,13 @@ mapRoutes.post("/:id", requireUser, requireMapAccess("viewer"), async (c) => {
   const body = await jsonBody(c);
 
   const title = mindmapService.requireTitle(body.title);
-  mindmapService.assertTitleAvailable(user.id, title);
+  await mindmapService.assertTitleAvailable(user.id, title);
 
   const description =
     typeof body.description === "string" ? body.description : null;
-  const copy = mindmaps.insert(
+  const copy = await mindmaps.insert(
     { title, description, creatorId: user.id, isPublic: false },
-    mindmapService.readXml(source.id),
+    await mindmapService.readXml(source.id),
   );
 
   c.header("Location", `/api/restful/maps/${copy.id}`);
@@ -530,7 +536,7 @@ mapRoutes.post(
   "/:id/history/:hid",
   requireUser,
   requireMapAccess("editor"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const user = currentUser(c);
     const hid = c.req.param("hid");
@@ -539,7 +545,7 @@ mapRoutes.post(
       const xml = history.latestXml(map.id);
       // No history yet is a silent no-op in Java (`if (size > 0)`).
       if (xml !== null) {
-        mindmapService.saveDocument(map, user, xml, { minor: true });
+        await mindmapService.saveDocument(map, user, xml, { minor: true });
       }
       return c.body(null, 204);
     }
@@ -555,7 +561,7 @@ mapRoutes.post(
         `History could not be found for mapid=${map.id}, hid=${historyId}`,
       );
     }
-    mindmapService.saveDocument(map, user, xml, { minor: false });
+    await mindmapService.saveDocument(map, user, xml, { minor: false });
     return c.body(null, 204);
   },
 );

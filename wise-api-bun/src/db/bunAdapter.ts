@@ -31,11 +31,15 @@ export function createBunAdapter(db: Database): DbAdapter {
       db.run(sql, params as SQLQueryBindings[]);
     },
 
-    async batch(statements: readonly Statement[]): Promise<void> {
-      db.transaction(() => {
-        for (const statement of statements) {
-          db.run(statement.sql, (statement.params ?? []) as SQLQueryBindings[]);
-        }
+    async batch<T = unknown>(statements: readonly Statement[]): Promise<T[][]> {
+      return db.transaction(() => {
+        // .query(sql).all(...) (not db.run()) so a RETURNING clause's rows
+        // come back -- db.run() only reports {changes, lastInsertRowid}.
+        return statements.map((statement) =>
+          db
+            .query<T, SQLQueryBindings[]>(statement.sql)
+            .all(...((statement.params ?? []) as SQLQueryBindings[])),
+        );
       })();
     },
   };

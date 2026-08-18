@@ -27,6 +27,13 @@ export interface DbAdapter {
   all<T>(sql: string, params?: readonly unknown[]): Promise<T[]>;
   /** Runs a statement with no rows to read back (INSERT/UPDATE/DELETE without RETURNING). */
   run(sql: string, params?: readonly unknown[]): Promise<void>;
-  /** Runs every statement atomically: all commit, or none do. */
-  batch(statements: readonly Statement[]): Promise<void>;
+  /**
+   * Runs every statement atomically: all commit, or none do. Returns one
+   * result array per statement, in order -- each populated from that
+   * statement's `RETURNING` clause, or empty if it had none. Confirmed
+   * against Cloudflare D1's real `batch()`, which returns exactly this
+   * shape (`D1Result[]`, each with a `.results` array) before this
+   * interface was extended to match it (Task 3.1, tasks/plan.md).
+   */
+  batch<T = unknown>(statements: readonly Statement[]): Promise<T[][]>;
 }
