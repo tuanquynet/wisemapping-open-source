@@ -6,7 +6,7 @@ This file provides guidance to AI assistants working with code in this repositor
 
 The REST API backend for WiseMapping, written in TypeScript using **Bun + Hono + SQLite** (`wise-api-bun/`). It provides authentication, mindmap CRUD, sharing, export/import XML, revision history, starred maps, labels, and admin management for the separately-versioned frontend (`wisemapping-frontend`).
 
-> **Note:** The legacy Java Spring Boot backend under `wise-api/` is retained strictly as a behavioral reference and is no longer used.
+> **Note:** The backend has been completely migrated to **Bun + Hono + SQLite** (`wise-api-bun/`).
 
 The frontend is **not** in this repo. Local dev requires checking out `https://github.com/wisemapping/wisemapping-frontend` separately and pointing it at this API.
 
