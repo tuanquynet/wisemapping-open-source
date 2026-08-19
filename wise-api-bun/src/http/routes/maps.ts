@@ -1,11 +1,12 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import * as accounts from "../../db/repos/accounts.ts";
 import * as collaborations from "../../db/repos/collaborations.ts";
 import * as history from "../../db/repos/history.ts";
 import * as labels from "../../db/repos/labels.ts";
 import * as mindmaps from "../../db/repos/mindmaps.ts";
-import * as lockManager from "../../services/lockManager.ts";
+import { bunLockManager } from "../../services/lockManager.ts";
+import type { LockManager } from "../../services/lockManager.interface.ts";
 import * as mindmapService from "../../services/mindmapService.ts";
 import { config } from "../../config.bun.ts";
 import { dbAdapter } from "../../db/client.ts";
@@ -38,6 +39,10 @@ import { currentUser, requireUser } from "../middleware/requireUser.ts";
 import type { Env } from "../env.ts";
 
 export const mapRoutes = new Hono<Env>();
+
+function resolveLockManager(c: Context<Env>): LockManager {
+  return c.get("lockManager") ?? bunLockManager;
+}
 
 const XML_CONTENT_TYPE = "application/xml; charset=UTF-8";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -274,7 +279,7 @@ mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), async (c) => {
     user === null ? null : await collaborations.findForMapAndAccount(map.id, user.id);
 
   // The holder sees their own lock as absent; only another user's name appears.
-  const lock = await lockManager.getLockInfo(map.id);
+  const lock = await resolveLockManager(c).getLockInfo(map.id);
   const lockedByFullName =
     lock !== null && (user === null || lock.userId !== user.id)
       ? lock.userFullName
@@ -340,7 +345,7 @@ mapRoutes.put(
       throw new BadRequestError("Map properties can not be null");
     }
 
-    await lockManager.lock(map, user);
+    await resolveLockManager(c).lock(map, user);
 
     const xml = mindmapService.validateAndNormalizeXml(body.xml);
     const minor = c.req.query("minor") === "true";
@@ -840,11 +845,11 @@ mapRoutes.put(
     const wantsLock = (await c.req.text()).trim().toLowerCase() === "true";
 
     if (!wantsLock) {
-      await lockManager.unlock(map, user);
+      await resolveLockManager(c).unlock(map, user);
       return c.body(null, 204);
     }
 
-    await lockManager.lock(map, user);
+    await resolveLockManager(c).lock(map, user);
     return c.json({ email: user.email }, 200);
   },
 );

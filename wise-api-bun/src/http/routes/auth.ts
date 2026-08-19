@@ -1,11 +1,16 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import * as authService from "../../services/authService.ts";
-import * as lockManager from "../../services/lockManager.ts";
+import { bunLockManager } from "../../services/lockManager.ts";
+import type { LockManager } from "../../services/lockManager.interface.ts";
 import { BadRequestError } from "../../domain/errors.ts";
 import type { Env } from "../env.ts";
 
 export const authRoutes = new Hono<Env>();
+
+function resolveLockManager(c: Context<Env>): LockManager {
+  return c.get("lockManager") ?? bunLockManager;
+}
 
 /**
  * POST /api/restful/authenticate
@@ -48,6 +53,6 @@ authRoutes.post("/logout", async (c) => {
   // listener/UnlockOnExpireListener. Without this a signed-out user's lock
   // blocks other editors for up to the full 30-minute TTL.
   const user = c.get("user");
-  if (user !== null) await lockManager.unlockAll(user);
+  if (user !== null) await resolveLockManager(c).unlockAll(user);
   return c.body(null, 200);
 });
