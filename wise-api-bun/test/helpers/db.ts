@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-import { openDatabase, db as appDb } from "../../src/db/client.ts";
+import { openDatabase, db as appDb } from "../../src/db/client.bun.ts";
 
 /**
  * Clear the shared application database between tests.

@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 
 import * as authService from "../../services/authService.ts";
+import { bunPasswordHasher, type PasswordHasher } from "../../util/passwordHash.ts";
 import { bunLockManager } from "../../services/lockManager.ts";
 import type { LockManager } from "../../services/lockManager.interface.ts";
 import { BadRequestError } from "../../domain/errors.ts";
@@ -10,6 +11,10 @@ export const authRoutes = new Hono<Env>();
 
 function resolveLockManager(c: Context<Env>): LockManager {
   return c.get("lockManager") ?? bunLockManager;
+}
+
+function resolvePasswordHasher(c: Context<Env>): PasswordHasher {
+  return c.get("passwordHasher") ?? bunPasswordHasher;
 }
 
 /**
@@ -35,7 +40,7 @@ authRoutes.post("/authenticate", async (c) => {
     email?: unknown;
     password?: unknown;
   };
-  const token = await authService.login(email, password);
+  const token = await authService.login(email, password, resolvePasswordHasher(c));
 
   c.header("Authorization", `Bearer ${token}`);
   return c.text(token);

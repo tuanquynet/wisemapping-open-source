@@ -1,5 +1,7 @@
 import type { Account, MindmapWithPeople } from "../domain/types.ts";
 import type { LockManager } from "../services/lockManager.interface.ts";
+import type { Config } from "../config.ts";
+import type { PasswordHasher } from "../util/passwordHash.ts";
 
 /**
  * Typed Hono context variables and, on Cloudflare Workers, bindings.
@@ -22,6 +24,8 @@ export interface Env {
     map: MindmapWithPeople | null;
     /** Injected LockManager implementation; defaults to bunLockManager on Bun. */
     lockManager?: LockManager;
+    config?: Config;
+    passwordHasher?: PasswordHasher;
   };
   Bindings: Record<string, string | undefined>;
 }

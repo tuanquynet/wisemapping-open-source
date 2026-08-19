@@ -1,5 +1,5 @@
 import * as accounts from "../db/repos/accounts.ts";
-import { config } from "../config.bun.ts";
+import { config } from "../config.ts";
 import type { Account } from "../domain/types.ts";
 import {
   AccountNotActivatedError,

@@ -1,13 +1,18 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import * as accounts from "../../db/repos/accounts.ts";
 import * as authService from "../../services/authService.ts";
+import { bunPasswordHasher, type PasswordHasher } from "../../util/passwordHash.ts";
 import { BadRequestError } from "../../domain/errors.ts";
 import { toRestUser } from "../dto/restUser.ts";
 import { currentUser, requireUser } from "../middleware/requireUser.ts";
 import type { Env } from "../env.ts";
 
 export const accountRoutes = new Hono<Env>();
+
+function resolvePasswordHasher(c: Context<Env>): PasswordHasher {
+  return c.get("passwordHasher") ?? bunPasswordHasher;
+}
 
 // Every route here requires an authenticated user, matching the class-level
 // @PreAuthorize("isAuthenticated() and hasRole('ROLE_USER')") on AccountController.
@@ -25,7 +30,11 @@ accountRoutes.get("/", (c) => {
  */
 
 accountRoutes.put("/password", async (c) => {
-  await authService.changePassword(currentUser(c), await c.req.text());
+  await authService.changePassword(
+    currentUser(c),
+    await c.req.text(),
+    resolvePasswordHasher(c),
+  );
   return c.body(null, 204);
 });
 

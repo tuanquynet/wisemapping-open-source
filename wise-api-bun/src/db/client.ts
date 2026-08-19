@@ -1,48 +1,34 @@
-import { Database } from "bun:sqlite";
-import { dirname } from "node:path";
-import { mkdirSync } from "node:fs";
-
-import { config } from "../config.bun.ts";
 import type { DbAdapter } from "./adapter.ts";
-import { createBunAdapter } from "./bunAdapter.ts";
-import { migrate } from "./migrate.ts";
 
 /**
- * Opens a database and applies the pragmas that make SQLite behave sanely for
- * a server process, then runs migrations.
+ * Shared runtime-agnostic database adapter holder (Task 6.2, tasks/plan.md).
  *
- * `foreign_keys` deserves special mention: it is per-connection and OFF by
- * default, so a missing PRAGMA here silently turns every `REFERENCES` clause in
- * schema.sql into documentation.
+ * All 6 repositories (`accounts`, `collaborations`, `history`, `labels`,
+ * `mindmaps`, `mindmapXml`) import `dbAdapter` from this module.
+ *
+ * On Bun, `client.bun.ts` initializes this with `BunSqliteAdapter`.
+ * On Cloudflare Workers, `workers.ts` initializes this with `D1Adapter`
+ * wrapping `c.env.DB`.
  */
-export function openDatabase(path: string): Database {
-  if (path !== ":memory:") {
-    mkdirSync(dirname(path), { recursive: true });
-  }
 
-  const db = new Database(path, { create: true, strict: true });
+let activeAdapter: DbAdapter | null = null;
 
-  // WAL lets readers proceed during a write. Not applicable to :memory:, where
-  // SQLite silently keeps the default journal mode.
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec("PRAGMA busy_timeout = 5000");
-  // Safe under WAL: a crash can lose the last transaction but cannot corrupt.
-  db.exec("PRAGMA synchronous = NORMAL");
-  // Negative means KiB rather than pages: 16 MB of page cache.
-  db.exec("PRAGMA cache_size = -16000");
-
-  migrate(db);
-  return db;
+export function setDbAdapter(adapter: DbAdapter): void {
+  activeAdapter = adapter;
 }
 
-export const db = openDatabase(config.dbPath);
+export function getDbAdapter(): DbAdapter {
+  if (activeAdapter === null) {
+    throw new Error(
+      "DbAdapter has not been initialized. Ensure client.bun.ts is imported on Bun or setDbAdapter() is called on Workers.",
+    );
+  }
+  return activeAdapter;
+}
 
-/**
- * The same connection as `db`, exposed through the async `DbAdapter`
- * interface. Repos, services, middleware, and routes migrate to this export
- * in Phase 2+ of the Cloudflare port (tasks/plan.md); `db` above keeps
- * serving every unconverted call site unchanged in the meantime, so this is
- * a pure addition, not a replacement.
- */
-export const dbAdapter: DbAdapter = createBunAdapter(db);
+export const dbAdapter: DbAdapter = {
+  get: (sql, params) => getDbAdapter().get(sql, params),
+  all: (sql, params) => getDbAdapter().all(sql, params),
+  run: (sql, params) => getDbAdapter().run(sql, params),
+  batch: (stmts) => getDbAdapter().batch(stmts),
+};

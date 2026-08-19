@@ -8,7 +8,7 @@ import * as mindmaps from "../../db/repos/mindmaps.ts";
 import { bunLockManager } from "../../services/lockManager.ts";
 import type { LockManager } from "../../services/lockManager.interface.ts";
 import * as mindmapService from "../../services/mindmapService.ts";
-import { config } from "../../config.bun.ts";
+import { config } from "../../config.ts";
 import { dbAdapter } from "../../db/client.ts";
 import type { Statement } from "../../db/adapter.ts";
 import { accepts, parseFilter } from "../../domain/mindmapFilter.ts";

@@ -1,10 +1,15 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import * as authService from "../../services/authService.ts";
+import { bunPasswordHasher, type PasswordHasher } from "../../util/passwordHash.ts";
 import { BadRequestError } from "../../domain/errors.ts";
 import type { Env } from "../env.ts";
 
 export const userRoutes = new Hono<Env>();
+
+function resolvePasswordHasher(c: Context<Env>): PasswordHasher {
+  return c.get("passwordHasher") ?? bunPasswordHasher;
+}
 
 async function jsonBody(c: {
   req: { json: () => Promise<unknown> };
@@ -25,7 +30,7 @@ async function jsonBody(c: {
  */
 userRoutes.post("/", async (c) => {
   const body = await jsonBody(c);
-  const { account } = await authService.register(body);
+  const { account } = await authService.register(body, resolvePasswordHasher(c));
 
   c.header("Location", `/api/restful/users/${account.id}`);
   c.header("ResourceId", String(account.id));
@@ -50,7 +55,7 @@ userRoutes.put("/resetPassword", async (c) => {
 /** POST /api/restful/users/resetPasswordToken -- public, 204. */
 userRoutes.post("/resetPasswordToken", async (c) => {
   const body = await jsonBody(c);
-  await authService.resetPasswordFromToken(body.token, body.password);
+  await authService.resetPasswordFromToken(body.token, body.password, resolvePasswordHasher(c));
   return c.body(null, 204);
 });
 

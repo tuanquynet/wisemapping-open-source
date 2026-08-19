@@ -6,6 +6,7 @@
 name = "wise-api-bun"
 main = "src/workers.ts"
 compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
 
 # Placeholder D1 binding. `wrangler d1 migrations apply --local` works
 # against this database_id unmodified -- confirmed in Task 0.2's spike; a

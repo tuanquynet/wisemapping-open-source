@@ -139,11 +139,20 @@ function sweep(): void {
  * this timer keeps the process alive forever, and a leaked interval across
  * `bun test` files is the usual way that bites.
  */
-const sweeper = setInterval(sweep, SWEEP_INTERVAL_MS);
-sweeper.unref();
+let sweeper: ReturnType<typeof setInterval> | null = null;
+
+if (typeof Bun !== "undefined") {
+  sweeper = setInterval(sweep, SWEEP_INTERVAL_MS);
+  if (sweeper && typeof sweeper === "object" && "unref" in sweeper && typeof sweeper.unref === "function") {
+    sweeper.unref();
+  }
+}
 
 export function shutdown(): void {
-  clearInterval(sweeper);
+  if (sweeper !== null) {
+    clearInterval(sweeper);
+    sweeper = null;
+  }
   locksByMapId.clear();
 }
 

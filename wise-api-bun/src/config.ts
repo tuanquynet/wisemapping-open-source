@@ -1,17 +1,14 @@
 /**
- * Application configuration: a pure factory over an explicit env record.
+ * Application configuration: a pure factory over an explicit env record,
+ * with runtime-agnostic dynamic getters (Task 6.2, tasks/plan.md).
  *
- * Replaces the 74-key `application.yml` of the Java app. Most of that file was
- * Spring framework configuration (Hikari, Hibernate, Ehcache, Micrometer,
- * resilience4j) with no analogue here; what remains is the ~15 keys below.
+ * Replaces the 74-key `application.yml` of the Java app.
  *
- * This module must never read `Bun.env`, `process.env`, or any other
- * ambient global directly -- it is imported by both the Bun entrypoint and,
- * eventually, the Cloudflare Workers entrypoint, and Workers has no `Bun`
- * global to read at module-evaluation time. Bun's eager, process-wide
- * instantiation lives in `config.bun.ts`, which calls `buildConfig(Bun.env)`
- * once at import time -- everything that needs the Bun-side singleton
- * imports it from there, not from this file.
+ * On Bun, `config.*` lazily initializes from `Bun.env` on first access if
+ * `setConfig()` wasn't called.
+ * On Cloudflare Workers, `workers.ts` builds `Config` from `c.env` on the
+ * first request and calls `setConfig(config)`, populating all subsequent
+ * reads across services, routes, and utilities.
  */
 
 export class ConfigError extends Error {}
@@ -41,9 +38,7 @@ export interface Config {
 
 /**
  * Builds and validates configuration from an explicit env record. Invalid
- * configuration throws `ConfigError` immediately, so a caller that runs this
- * eagerly (as `config.bun.ts` does) never reaches request-handling code in a
- * half-configured state.
+ * configuration throws `ConfigError` immediately.
  */
 export function buildConfig(env: Record<string, string | undefined>): Config {
   const problems: string[] = [];
@@ -97,15 +92,6 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
       .filter((s) => s.length > 0);
   }
 
-  /**
-   * The Java app base64-decodes `app.jwt.secret` before using it as the HMAC
-   * key (`Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret))`). We keep that
-   * convention so a secret generated for either implementation works in both.
-   *
-   * Unlike the Java app -- which only logs a warning when its hardcoded
-   * default is still in use, meaning the default ships -- an unset secret is
-   * fatal here.
-   */
   function jwtKey(): Uint8Array {
     const encoded = required(
       "JWT_SECRET",
@@ -120,7 +106,6 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
       problems.push("JWT_SECRET must be valid base64");
       return new Uint8Array();
     }
-    // HS256 keys shorter than the 256-bit digest weaken the MAC for no reason.
     if (decoded.length < 32) {
       problems.push(
         `JWT_SECRET must decode to at least 32 bytes (got ${decoded.length}); use: openssl rand -base64 48`,
@@ -138,7 +123,7 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     return "info";
   }
 
-  const config: Config = Object.freeze({
+  const result: Config = Object.freeze({
     port: int("PORT", 8080),
     dbPath: str("DB_PATH", "./data/wisemapping.db"),
     logLevel: logLevel(),
@@ -146,13 +131,6 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     jwtKey: jwtKey(),
     jwtExpirationMin: int("JWT_EXPIRATION_MIN", 10080),
 
-    /**
-     * Admin is a single email address, as in the Java app (`app.admin.user`).
-     * Normalised on both sides -- the Java version trims the request's email
-     * but not the configured value, so a config entry with trailing
-     * whitespace silently grants admin to nobody. Empty means "no admin
-     * exists".
-     */
     adminEmail: str("ADMIN_EMAIL", "").trim().toLowerCase(),
 
     uiBaseUrl: str("UI_BASE_URL", "http://localhost:3000"),
@@ -162,10 +140,6 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     ]),
 
     registrationEnabled: bool("REGISTRATION_ENABLED", true),
-    /**
-     * Java defaults this to true. There is no mailer in scope here, so it
-     * defaults to false; when enabled, activation URLs go to stdout.
-     */
     emailConfirmationEnabled: bool("EMAIL_CONFIRMATION_ENABLED", false),
     captchaEnabled: bool("CAPTCHA_ENABLED", false),
     captchaSiteKey: str("CAPTCHA_SITE_KEY", ""),
@@ -182,6 +156,48 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     );
   }
 
-  return config;
+  return result;
 }
 
+let activeConfig: Config | null = null;
+
+export function setConfig(cfg: Config): void {
+  activeConfig = cfg;
+}
+
+export function getConfig(): Config {
+  if (activeConfig === null) {
+    if (typeof Bun !== "undefined" && Bun.env) {
+      activeConfig = buildConfig(Bun.env);
+      return activeConfig;
+    }
+    throw new Error(
+      "Configuration has not been initialized. Ensure buildConfig() and setConfig() are called.",
+    );
+  }
+  return activeConfig;
+}
+
+/**
+ * Dynamic configuration proxy. Property reads resolve against `getConfig()`,
+ * so modules importing `config` never access uninitialized globals at module
+ * load time on Workers.
+ */
+export const config: Config = {
+  get port() { return getConfig().port; },
+  get dbPath() { return getConfig().dbPath; },
+  get logLevel() { return getConfig().logLevel; },
+  get jwtKey() { return getConfig().jwtKey; },
+  get jwtExpirationMin() { return getConfig().jwtExpirationMin; },
+  get adminEmail() { return getConfig().adminEmail; },
+  get uiBaseUrl() { return getConfig().uiBaseUrl; },
+  get apiBaseUrl() { return getConfig().apiBaseUrl; },
+  get corsAllowedOrigins() { return getConfig().corsAllowedOrigins; },
+  get registrationEnabled() { return getConfig().registrationEnabled; },
+  get emailConfirmationEnabled() { return getConfig().emailConfirmationEnabled; },
+  get captchaEnabled() { return getConfig().captchaEnabled; },
+  get captchaSiteKey() { return getConfig().captchaSiteKey; },
+  get analyticsAccount() { return getConfig().analyticsAccount; },
+  get mapListMaxSize() { return getConfig().mapListMaxSize; },
+  get noteMaxLength() { return getConfig().noteMaxLength; },
+};

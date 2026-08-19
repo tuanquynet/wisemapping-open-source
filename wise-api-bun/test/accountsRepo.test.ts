@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import * as accounts from "../src/db/repos/accounts.ts";
-import { db } from "../src/db/client.ts";
+import { db } from "../src/db/client.bun.ts";
 import { API, json, post } from "./helpers/client.ts";
 import { login } from "./helpers/auth.ts";
 import { resetDb } from "./helpers/db.ts";
