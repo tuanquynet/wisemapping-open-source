@@ -1,4 +1,4 @@
-const BASE = "http://127.0.0.1:8794/api/restful";
+const BASE = (process.argv[2] || process.env.API_BASE_URL || "http://127.0.0.1:8794/api/restful").replace(/\/+$/, "");
 
 async function step(name: string, fn: () => Promise<void>) {
   try {
@@ -11,7 +11,7 @@ async function step(name: string, fn: () => Promise<void>) {
 }
 
 async function main() {
-  console.log("Running E2E tests against Cloudflare Workers + D1 + Durable Objects (http://127.0.0.1:8794)...");
+  console.log(`Running E2E tests against Cloudflare Workers + D1 + Durable Objects (${BASE})...`);
 
   // 1. App Config
   await step("1. GET /app/config", async () => {

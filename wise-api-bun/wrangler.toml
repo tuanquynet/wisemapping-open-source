@@ -14,8 +14,8 @@ compatibility_flags = ["nodejs_compat"]
 # first `--remote` deploy, wired in Task 6.2.
 [[d1_databases]]
 binding = "DB"
-database_name = "wise-api-bun-dev"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_name = "wise-api-bun-prod"
+database_id = "e02fd1c4-443f-40d3-86b9-22f519289535"
 
 [[durable_objects.bindings]]
 name = "MAP_LOCKS"
@@ -23,4 +23,4 @@ class_name = "MapLockDurableObject"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["MapLockDurableObject"]
+new_sqlite_classes = ["MapLockDurableObject"]
