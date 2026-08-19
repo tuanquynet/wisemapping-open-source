@@ -7,7 +7,6 @@ and is not modified.
 Goal: one process, one file, no JVM and no database container.
 
 ## Status
-
 | Milestone | Scope                                                                   | State    |
 | --------- | ----------------------------------------------------------------------- | -------- |
 | M1        | Skeleton, schema, migrations, config, error contract, `GET /app/config` | **done** |
@@ -16,10 +15,10 @@ Goal: one process, one file, no JVM and no database container.
 | M4        | Sharing, starred, publish, map list + `?q=` filters                     | **done** |
 | M5        | History + revert, labels                                                | **done** |
 | M6        | Edit locks, `/metadata`, hardening                                      | **done** |
+| M7        | Cloudflare Workers + D1 + Durable Objects edge deployment               | **done** |
 
-All 42 in-scope routes are implemented. `bun test` — 155 tests passing.
+All 42 in-scope routes are implemented. `bun test` — 193 tests passing (100% green).
 `bun run typecheck` — clean.
-
 ## Quick start
 
 ```sh
@@ -136,13 +135,24 @@ is covered by a test that says so:
   validation happens here either. Adding it would reject documents the current
   server accepts.
 
-## Constraints
+## Deployment Targets
 
-- **Single process only.** Edit locks are in-memory (M6), as in the Java app, so
-  the API cannot be horizontally scaled without moving them to SQLite or Redis.
-- SQLite runs in WAL mode with `foreign_keys` on. Back up by copying the `.db`
-  file with the server stopped, or via `VACUUM INTO`.
+`wise-api-bun` supports two native deployment targets:
 
+1. **Bun (Single-process / Docker):**
+   - SQLite runs in WAL mode with `foreign_keys` on (`bun:sqlite`).
+   - Collaborative edit locks are managed in-memory with a 60-second polling sweeper.
+   - Passwords hashed with argon2id (`Bun.password`).
+
+2. **Cloudflare Workers (Edge-native Serverless):**
+   - Serverless SQLite via **Cloudflare D1** (`D1Adapter`).
+   - Distributed edit locks managed via **Cloudflare Durable Objects** (`MapLockDurableObject` with `alarm()`-driven 30-minute lease expiry).
+   - Passwords hashed with native WebCrypto PBKDF2 (SHA-512, 100,000 iterations).
+   - See [`docs/cloudflare-deploy.md`](docs/cloudflare-deploy.md) for the complete Cloudflare deployment guide.
+
+### Frontend Compatibility
+
+**Zero frontend code changes required.** The frontend (`wisemapping-frontend`) communicates exclusively via REST endpoints and standard JWT `Authorization: Bearer` headers. Pointing the frontend at Cloudflare is a pure configuration change (setting `apiBaseUrl` to the Worker URL and setting `CORS_ALLOWED_ORIGINS` on the Worker).
 ## Layout
 
 ```
