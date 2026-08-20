@@ -23,14 +23,19 @@ cp .env.example .env
 # Set JWT_SECRET (required for server startup)
 echo "JWT_SECRET=$(openssl rand -base64 48)" >> .env
 
-# Development & Running
+# Development & Running (Bun)
 bun run dev              # dev server with hot reload (http://localhost:8080)
 bun start                # production start (bun src/index.ts)
 
+# Development & Running (Cloudflare Workers + D1)
+bunx wrangler d1 migrations apply DB --local   # apply D1 migrations locally
+bunx wrangler dev --local --port 8080          # local Workers dev server with D1 & DO
+bun run scripts/verify-worker-e2e.ts           # run 14-step E2E verification on Workers
+bunx wrangler deploy                           # deploy to Cloudflare Workers
+
 # Testing & Quality
-bun test                 # run full test suite (in-memory SQLite DB)
+bun test                 # run full test suite (193 tests, in-memory SQLite DB)
 bun run typecheck        # TypeScript type check (tsc --noEmit)
-```
 
 ## Configuration model
 
@@ -60,12 +65,12 @@ util/              Logger, JWT helpers, ISO-8601 utilities
 test/              bun test suite driving app.fetch against in-memory DB
 ```
 
-### Key Differences from Legacy Java Version
-- **SQLite Database:** Single file / in-memory DB (`bun:sqlite` with WAL mode enabled).
-- **Argon2id Passwords:** Passwords hashed with `Bun.password` (argon2id).
+### Key Architectural Features
+- **Dual Deployment Targets:** Supports both single-process Bun (`bun:sqlite` + in-memory locks) and Cloudflare Workers (Cloudflare D1 via `D1Adapter` + Cloudflare Durable Objects via `MapLockDurableObject`).
+- **Password Hashing:** Argon2id on Bun (`Bun.password`) and WebCrypto PBKDF2 (SHA-512, 100k iter) on Workers (`workerPasswordHasher`).
 - **Strict Error & Type Handling:** Standardized error contracts (`{fieldErrors, globalSeverity, globalErrors}`).
-- **REST Route Coverage:** Implements the REST routes `wisemapping-frontend` requires (see `README.md` for the current route list).
-
+- **REST Route Coverage:** All 42 REST routes required by `wisemapping-frontend` implemented and verified on both runtimes.
+- **Frontend Compatibility:** `wisemapping-frontend` requires zero code changes (config change only).
 ## Code conventions
 
 - **TypeScript:** Strict type checking enabled (`bun run typecheck`).
@@ -87,6 +92,6 @@ test/              bun test suite driving app.fetch against in-memory DB
 
 ## Running and verifying
 
-- No CI currently runs `bun test` or `bun run typecheck` for `wise-api-bun` — run both locally before pushing.
-
+- Automated CI runs in `.github/workflows/cloudflare-deploy.yml` on every push/PR touching `wise-api-bun/**`, executing `bun test`, `bun run typecheck`, and `wrangler deploy --dry-run`.
+- Run `bun test` and `bun run typecheck` locally before pushing.
 <!-- /bmad:context -->

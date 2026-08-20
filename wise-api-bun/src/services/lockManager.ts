@@ -1,6 +1,9 @@
 import { LockError, TooManyLocksError } from "../domain/errors.ts";
 import { fullName, type Account, type Mindmap } from "../domain/types.ts";
 import { logger } from "../util/logger.ts";
+import type { LockInfo, LockManager } from "./lockManager.interface.ts";
+
+export type { LockInfo, LockManager };
 
 /**
  * In-memory edit locks, porting `service/LockManagerImpl.java` and
@@ -10,30 +13,15 @@ import { logger } from "../util/logger.ts";
  *   - a lock lives for 30 MINUTES  (`LockInfo.EXPIRATION_MIN`)
  *   - the sweeper runs every 1 MINUTE (`LockManagerImpl.ONE_MINUTE_MILLISECONDS`)
  *
- * SINGLE PROCESS ONLY. This state is per-instance, so the API cannot be scaled
- * horizontally without moving locks into SQLite or Redis. That limitation is
- * inherited from the Java design.
+ * Implements the async `LockManager` interface on Bun (Task 5.1, tasks/plan.md).
+ * A Durable Object implementation (`MapLockDurableObject.ts`, Task 5.2)
+ * provides the equivalent for Cloudflare Workers.
  */
 
 const MAX_LOCKS = 1000;
 const WARN_THRESHOLD = Math.floor(MAX_LOCKS * 0.8);
 const LOCK_TTL_MS = 30 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 1000;
-
-export interface LockInfo {
-  mapId: number;
-  userId: number;
-  userEmail: string;
-  userFullName: string;
-  expiresAt: number;
-  /**
-   * Opaque session id. A string, not a number: the Java version uses
-   * `System.nanoTime()`, and `Bun.nanoseconds()` exceeds
-   * `Number.MAX_SAFE_INTEGER` within hours of uptime -- this value is serialised
-   * to the client, so as a JS number it would silently lose precision.
-   */
-  session: string;
-}
 
 const locksByMapId = new Map<number, LockInfo>();
 
@@ -49,7 +37,7 @@ function isExpired(lock: LockInfo, now = Date.now()): boolean {
  * Checking on read closes that window; it can only ever release a lock earlier
  * than the Java version would, never later.
  */
-export function getLockInfo(mapId: number): LockInfo | null {
+export async function getLockInfo(mapId: number): Promise<LockInfo | null> {
   const lock = locksByMapId.get(mapId);
   if (lock === undefined) return null;
   if (isExpired(lock)) {
@@ -59,12 +47,12 @@ export function getLockInfo(mapId: number): LockInfo | null {
   return lock;
 }
 
-export function isLocked(map: Mindmap): boolean {
-  return getLockInfo(map.id) !== null;
+export async function isLocked(map: Mindmap): Promise<boolean> {
+  return (await getLockInfo(map.id)) !== null;
 }
 
-export function isLockedBy(map: Mindmap, user: Account): boolean {
-  const lock = getLockInfo(map.id);
+export async function isLockedBy(map: Mindmap, user: Account): Promise<boolean> {
+  const lock = await getLockInfo(map.id);
   return lock !== null && lock.userId === user.id;
 }
 
@@ -78,8 +66,8 @@ function newSession(): string {
  * The refresh-on-every-call behaviour is load-bearing: the lock is a lease, and
  * the editor's periodic save is what keeps it alive.
  */
-export function lock(map: Mindmap, user: Account): LockInfo {
-  const existing = getLockInfo(map.id);
+export async function lock(map: Mindmap, user: Account): Promise<LockInfo> {
+  const existing = await getLockInfo(map.id);
 
   if (existing !== null && existing.userId !== user.id) {
     throw LockError.lockLost();
@@ -118,8 +106,8 @@ export function lock(map: Mindmap, user: Account): LockInfo {
 }
 
 /** Releases the lock. Throws if it is held by someone else. */
-export function unlock(map: Mindmap, user: Account): void {
-  const lock = getLockInfo(map.id);
+export async function unlock(map: Mindmap, user: Account): Promise<void> {
+  const lock = await getLockInfo(map.id);
   if (lock === null) return; // Idempotent, as in the Java version.
   if (lock.userId !== user.id) {
     throw LockError.lockLost();
@@ -128,7 +116,7 @@ export function unlock(map: Mindmap, user: Account): void {
 }
 
 /** Releases every lock held by a user. Called on logout. */
-export function unlockAll(user: Account): number {
+export async function unlockAll(user: Account): Promise<number> {
   let released = 0;
   for (const [mapId, lock] of locksByMapId) {
     if (lock.userId === user.id) {
@@ -151,11 +139,20 @@ function sweep(): void {
  * this timer keeps the process alive forever, and a leaked interval across
  * `bun test` files is the usual way that bites.
  */
-const sweeper = setInterval(sweep, SWEEP_INTERVAL_MS);
-sweeper.unref();
+let sweeper: ReturnType<typeof setInterval> | null = null;
+
+if (typeof Bun !== "undefined") {
+  sweeper = setInterval(sweep, SWEEP_INTERVAL_MS);
+  if (sweeper && typeof sweeper === "object" && "unref" in sweeper && typeof sweeper.unref === "function") {
+    sweeper.unref();
+  }
+}
 
 export function shutdown(): void {
-  clearInterval(sweeper);
+  if (sweeper !== null) {
+    clearInterval(sweeper);
+    sweeper = null;
+  }
   locksByMapId.clear();
 }
 
@@ -169,3 +166,19 @@ export function expireForTest(mapId: number): void {
   const lock = locksByMapId.get(mapId);
   if (lock !== undefined) lock.expiresAt = Date.now() - 1;
 }
+
+export const bunLockManager: LockManager & {
+  clearAll(): void;
+  expireForTest(mapId: number): void;
+  shutdown(): void;
+} = {
+  getLockInfo,
+  isLocked,
+  isLockedBy,
+  lock,
+  unlock,
+  unlockAll,
+  clearAll,
+  expireForTest,
+  shutdown,
+};

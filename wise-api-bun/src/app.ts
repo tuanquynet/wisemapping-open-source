@@ -17,26 +17,24 @@ import type { Env } from "./http/env.ts";
  *
  * The Java controllers are inconsistent about trailing slashes -- `/maps/` and
  * `/labels/` and `/maps/{id}/collabs/` have one, `/maps` (create) does not -- and
- * the frontend calls whichever spelling each controller declared. Registering
- * both explicitly does not work: Hono's `route()` normalises the mount path, so
- * the two registrations collapse and the trailing-slash form 404s.
- *
- * This is safe rather than a papered-over ambiguity: no two in-scope handlers
- * differ only by a trailing slash on the same HTTP method, so nothing is
- * shadowed by accepting both.
+ * the frontend calls whichever spelling each controller declared.
  */
 export const app = new Hono<Env>({ strict: false });
 
 /**
  * CORS. `exposeHeaders` is load-bearing, not boilerplate: the browser cannot
  * read `Authorization` (returned by login), `Location`, or the custom
- * `ResourceId` header (returned by every create) unless they are exposed. The
- * Java app achieves this with `exposedHeaders: *`.
+ * `ResourceId` header (returned by every create) unless they are exposed.
  */
 app.use(
   "/api/*",
   cors({
-    origin: config.corsAllowedOrigins,
+    origin: (origin, c) => {
+      const allowed = c.get("config")?.corsAllowedOrigins ?? config.corsAllowedOrigins;
+      return allowed.includes(origin) || allowed.includes("*")
+        ? origin
+        : (allowed[0] ?? "http://localhost:3000");
+    },
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
     exposeHeaders: ["Authorization", "Location", "ResourceId"],

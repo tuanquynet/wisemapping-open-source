@@ -10,6 +10,7 @@ import {
 } from "../domain/errors.ts";
 import { logger } from "../util/logger.ts";
 import { signToken } from "../util/jwt.ts";
+import { bunPasswordHasher, type PasswordHasher } from "../util/passwordHash.ts";
 
 /** From `Account.MIN/MAX_PASSWORD_LENGTH_SIZE`. */
 export const MIN_PASSWORD_LENGTH = 8;
@@ -18,20 +19,6 @@ export const MAX_PASSWORD_LENGTH = 40;
 const MAX_NAME_LENGTH = 255;
 
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // one hour, as in UserServiceImpl
-
-/**
- * Argon2id via `Bun.password`. Greenfield, so none of the Java compatibility
- * machinery applies -- no `ENC:` unsalted SHA-1, no `{bcrypt}` prefix dispatch.
- * `Bun.password.verify` reads the algorithm from the stored hash, so migrating
- * to something else later needs no dual-read path.
- */
-function hashPassword(plain: string): Promise<string> {
-  return Bun.password.hash(plain, { algorithm: "argon2id" });
-}
-
-function verifyPassword(plain: string, hash: string): Promise<boolean> {
-  return Bun.password.verify(plain, hash);
-}
 
 /**
  * Generates an activation code in the Java format: a signed 64-bit integer.
@@ -64,8 +51,15 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/**
+ * `hasher` defaults to `bunPasswordHasher` so every existing Bun call site
+ * (routes/account.ts, routes/auth.ts) keeps compiling and behaving
+ * identically without passing one. A Cloudflare Workers caller passes
+ * `workerPasswordHasher` explicitly (Task 2.1, tasks/plan.md).
+ */
 export async function register(
   input: RegistrationInput,
+  hasher: PasswordHasher = bunPasswordHasher,
 ): Promise<RegisteredAccount> {
   if (!config.registrationEnabled) {
     throw new BadRequestError("Registration is disabled.");
@@ -104,7 +98,7 @@ export async function register(
     fieldErrors.password = `The password must have less than ${MAX_PASSWORD_LENGTH} characters.`;
 
   if (fieldErrors.email === undefined) {
-    const existing = accounts.findRowByEmail(email);
+    const existing = await accounts.findRowByEmail(email);
     // A placeholder is not a conflict -- registration upgrades it in place.
     if (existing !== null && existing.password_hash !== null) {
       fieldErrors.email =
@@ -122,11 +116,11 @@ export async function register(
   const needsConfirmation = config.emailConfirmationEnabled;
   const activationCode = needsConfirmation ? newActivationCode() : null;
 
-  const account = accounts.createOrUpgrade({
+  const account = await accounts.createOrUpgrade({
     email,
     firstname,
     lastname,
-    passwordHash: await hashPassword(password),
+    passwordHash: await hasher.hash(password),
     locale: null,
     activationCode,
     activatedAt: needsConfirmation ? null : Date.now(),
@@ -142,8 +136,8 @@ export async function register(
   return { account, activationCode };
 }
 
-export function activate(code: string): void {
-  const account = accounts.findByActivationCode(code);
+export async function activate(code: string): Promise<void> {
+  const account = await accounts.findByActivationCode(code);
   if (account === null) {
     // Covers both an unknown code and an already-activated one, since
     // activation clears the code.
@@ -151,7 +145,7 @@ export function activate(code: string): void {
       "The activation code is invalid or has already been used.",
     );
   }
-  accounts.activate(account.id);
+  await accounts.activate(account.id);
 }
 
 /**
@@ -164,20 +158,21 @@ export function activate(code: string): void {
 export async function login(
   emailInput: unknown,
   passwordInput: unknown,
+  hasher: PasswordHasher = bunPasswordHasher,
 ): Promise<string> {
   const email = asString(emailInput).trim();
   const password = asString(passwordInput);
 
-  const row = email === "" ? null : accounts.findRowByEmail(email);
+  const row = email === "" ? null : await accounts.findRowByEmail(email);
 
   if (row === null || row.password_hash === null) {
     // Verify against a real throwaway hash so a missing account costs the same
     // as a wrong password; otherwise response latency enumerates valid emails.
-    await verifyPassword(password, await dummyHash());
+    await hasher.verify(password, await dummyHash(hasher));
     throw new InvalidCredentialsError();
   }
 
-  if (!(await verifyPassword(password, row.password_hash))) {
+  if (!(await hasher.verify(password, row.password_hash))) {
     throw new InvalidCredentialsError();
   }
 
@@ -192,19 +187,20 @@ export async function login(
  * A genuine argon2id hash of a random value, computed once on first use and
  * used only to equalise timing on the unknown-account path. Generated rather
  * than hardcoded so it is guaranteed to be a valid encoding with the same
- * parameters as real hashes -- a literal would drift from `hashPassword` and a
- * malformed one would throw instead of taking the intended time.
+ * parameters as real hashes -- a literal would drift from the hasher in use
+ * and a malformed one would throw instead of taking the intended time.
  */
 let dummyHashPromise: Promise<string> | null = null;
 
-function dummyHash(): Promise<string> {
-  dummyHashPromise ??= hashPassword(crypto.randomUUID());
+function dummyHash(hasher: PasswordHasher): Promise<string> {
+  dummyHashPromise ??= hasher.hash(crypto.randomUUID());
   return dummyHashPromise;
 }
 
 export async function changePassword(
   account: Account,
   newPassword: unknown,
+  hasher: PasswordHasher = bunPasswordHasher,
 ): Promise<void> {
   const password = asString(newPassword);
   if (password.length < MIN_PASSWORD_LENGTH) {
@@ -217,23 +213,27 @@ export async function changePassword(
       `The password must have less than ${MAX_PASSWORD_LENGTH} characters.`,
     );
   }
-  accounts.updatePasswordHash(account.id, await hashPassword(password));
+  await accounts.updatePasswordHash(account.id, await hasher.hash(password));
 }
 
 /** Mirrors `RestResetPasswordAction`. OAUTH2_USER is unreachable here. */
 export type ResetPasswordAction = "EMAIL_SENT" | "OAUTH2_USER";
 
-export function requestPasswordReset(email: unknown): {
+export async function requestPasswordReset(email: unknown): Promise<{
   action: ResetPasswordAction;
-} {
-  const account = accounts.findRowByEmail(asString(email));
+}> {
+  const account = await accounts.findRowByEmail(asString(email));
 
   // Always report EMAIL_SENT: a distinct "no such user" reply would let anyone
   // test which addresses are registered. (The Java app throws
   // EmailNotExistsException here; not reproducing that is a deliberate choice.)
   if (account !== null && account.password_hash !== null) {
     const token = crypto.randomUUID().replaceAll("-", "");
-    accounts.setResetToken(account.id, token, Date.now() + RESET_TOKEN_TTL_MS);
+    await accounts.setResetToken(
+      account.id,
+      token,
+      Date.now() + RESET_TOKEN_TTL_MS,
+    );
     logger.info(
       `Password reset for ${account.email}: ${config.uiBaseUrl}/c/reset-password?token=${token}`,
     );
@@ -245,15 +245,16 @@ export function requestPasswordReset(email: unknown): {
 export async function resetPasswordFromToken(
   token: unknown,
   newPassword: unknown,
+  hasher: PasswordHasher = bunPasswordHasher,
 ): Promise<void> {
   const raw = asString(token);
-  const row = raw === "" ? null : accounts.findRowByResetToken(raw);
+  const row = raw === "" ? null : await accounts.findRowByResetToken(raw);
 
   if (row === null || row.reset_token_expires === null) {
     throw new BadRequestError("The reset link is invalid or has expired.");
   }
   if (row.reset_token_expires < Date.now()) {
-    accounts.clearResetToken(row.id);
+    await accounts.clearResetToken(row.id);
     throw new BadRequestError("The reset link is invalid or has expired.");
   }
 
@@ -268,7 +269,7 @@ export async function resetPasswordFromToken(
   }
 
   // updatePasswordHash clears the token, making it single-use.
-  accounts.updatePasswordHash(row.id, await hashPassword(password));
+  await accounts.updatePasswordHash(row.id, await hasher.hash(password));
 }
 
 /** Admin is a single configured email, as in the Java app (`app.admin.user`). */

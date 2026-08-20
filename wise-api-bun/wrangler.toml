@@ -1,0 +1,26 @@
+# Cloudflare Workers deployment target for wise-api-bun (tasks/plan.md).
+# This runs alongside the Bun deployment, not instead of it -- see
+# `src/config.bun.ts` and `src/workers.ts` for how the two entrypoints share
+# runtime-agnostic code without either depending on the other's globals.
+
+name = "wise-api-bun"
+main = "src/workers.ts"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Placeholder D1 binding. `wrangler d1 migrations apply --local` works
+# against this database_id unmodified -- confirmed in Task 0.2's spike; a
+# real remote database (`wrangler d1 create`) is only needed before the
+# first `--remote` deploy, wired in Task 6.2.
+[[d1_databases]]
+binding = "DB"
+database_name = "wise-api-bun-prod"
+database_id = "e02fd1c4-443f-40d3-86b9-22f519289535"
+
+[[durable_objects.bindings]]
+name = "MAP_LOCKS"
+class_name = "MapLockDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MapLockDurableObject"]

@@ -8,9 +8,8 @@ const rank: Record<LogLevel, number> = {
   debug: 4,
 };
 
-const threshold = rank[config.logLevel];
-
 function emit(level: Exclude<LogLevel, "silent">, args: unknown[]): void {
+  const threshold = rank[config.logLevel];
   if (rank[level] > threshold) return;
   const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)}`;
   if (level === "error" || level === "warn") {

@@ -1,10 +1,15 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import * as authService from "../../services/authService.ts";
+import { bunPasswordHasher, type PasswordHasher } from "../../util/passwordHash.ts";
 import { BadRequestError } from "../../domain/errors.ts";
 import type { Env } from "../env.ts";
 
 export const userRoutes = new Hono<Env>();
+
+function resolvePasswordHasher(c: Context<Env>): PasswordHasher {
+  return c.get("passwordHasher") ?? bunPasswordHasher;
+}
 
 async function jsonBody(c: {
   req: { json: () => Promise<unknown> };
@@ -25,7 +30,7 @@ async function jsonBody(c: {
  */
 userRoutes.post("/", async (c) => {
   const body = await jsonBody(c);
-  const { account } = await authService.register(body);
+  const { account } = await authService.register(body, resolvePasswordHasher(c));
 
   c.header("Location", `/api/restful/users/${account.id}`);
   c.header("ResourceId", String(account.id));
@@ -39,18 +44,18 @@ userRoutes.post("/", async (c) => {
  * even for an unknown address: the Java app throws EmailNotExistsException here,
  * which turns the endpoint into an account-existence oracle.
  */
-userRoutes.put("/resetPassword", (c) => {
+userRoutes.put("/resetPassword", async (c) => {
   const email = c.req.query("email");
   if (email === undefined || email === "") {
     throw new BadRequestError("An email address is required.");
   }
-  return c.json(authService.requestPasswordReset(email));
+  return c.json(await authService.requestPasswordReset(email));
 });
 
 /** POST /api/restful/users/resetPasswordToken -- public, 204. */
 userRoutes.post("/resetPasswordToken", async (c) => {
   const body = await jsonBody(c);
-  await authService.resetPasswordFromToken(body.token, body.password);
+  await authService.resetPasswordFromToken(body.token, body.password, resolvePasswordHasher(c));
   return c.body(null, 204);
 });
 
@@ -61,11 +66,11 @@ userRoutes.post("/resetPasswordToken", async (c) => {
  * the Java app; `Number()` on its 19 digits loses precision, which would fail
  * activation for a subset of accounts.
  */
-userRoutes.put("/activation", (c) => {
+userRoutes.put("/activation", async (c) => {
   const code = c.req.query("code");
   if (code === undefined || code === "") {
     throw new BadRequestError("An activation code is required.");
   }
-  authService.activate(code);
+  await authService.activate(code);
   return c.body(null, 204);
 });

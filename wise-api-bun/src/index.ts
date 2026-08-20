@@ -1,6 +1,6 @@
 import { app } from "./app.ts";
 import { config } from "./config.ts";
-import { db } from "./db/client.ts";
+import { db } from "./db/client.bun.ts";
 import * as lockManager from "./services/lockManager.ts";
 import { logger } from "./util/logger.ts";
 

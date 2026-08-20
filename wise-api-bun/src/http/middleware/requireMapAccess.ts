@@ -32,7 +32,7 @@ export const requireMapAccess = (required: Role) =>
       throw new BadRequestError(`Invalid map id: ${raw}`);
     }
 
-    const map = mindmaps.findById(id);
+    const map = await mindmaps.findById(id);
     if (map === null) {
       throw new MapNotFoundError(id);
     }
@@ -45,7 +45,7 @@ export const requireMapAccess = (required: Role) =>
       return c.json(unauthorizedBody(), 401);
     }
 
-    if (!hasMapPermission(user, map, required)) {
+    if (!(await hasMapPermission(user, map, required))) {
       throw new AccessDeniedError();
     }
 

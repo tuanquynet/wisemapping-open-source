@@ -14,8 +14,9 @@ import { logger } from "./logger.ts";
 const ALG = "HS256";
 export const BEARER_PREFIX = "Bearer ";
 
-/** The HMAC key as a string, since hono/jwt takes a string secret. */
-const secret = new TextDecoder().decode(config.jwtKey);
+function getSecret(): string {
+  return new TextDecoder().decode(config.jwtKey);
+}
 
 export interface Claims {
   sub: string;
@@ -31,7 +32,7 @@ export async function signToken(email: string): Promise<string> {
       iat: nowSeconds,
       exp: nowSeconds + config.jwtExpirationMin * 60,
     },
-    secret,
+    getSecret(),
     ALG,
   );
 
@@ -45,7 +46,7 @@ export async function signToken(email: string): Promise<string> {
 /** Returns the claims, or null for any malformed, mis-signed or expired token. */
 export async function verifyToken(token: string): Promise<Claims | null> {
   try {
-    const payload = (await verify(token, secret, ALG)) as unknown as Claims;
+    const payload = (await verify(token, getSecret(), ALG)) as unknown as Claims;
     return typeof payload.sub === "string" && payload.sub !== ""
       ? payload
       : null;

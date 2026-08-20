@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import * as accounts from "../src/db/repos/accounts.ts";
-import { db } from "../src/db/client.ts";
+import { db } from "../src/db/client.bun.ts";
 import { API, json, post } from "./helpers/client.ts";
 import { login } from "./helpers/auth.ts";
 import { resetDb } from "./helpers/db.ts";
@@ -18,7 +18,7 @@ beforeEach(() => resetDb());
  */
 describe("invitee placeholder upgrade", () => {
   test("a placeholder cannot authenticate", async () => {
-    accounts.createPlaceholder("invited@example.org");
+    await accounts.createPlaceholder("invited@example.org");
 
     const res = await post(`${API}/authenticate`, {
       json: { email: "invited@example.org", password: "password123" },
@@ -27,7 +27,7 @@ describe("invitee placeholder upgrade", () => {
   });
 
   test("registration upgrades the placeholder in place, keeping its id", async () => {
-    const placeholder = accounts.createPlaceholder("invited@example.org");
+    const placeholder = await accounts.createPlaceholder("invited@example.org");
     expect(placeholder.isRegistered).toBe(false);
 
     const res = await post(`${API}/users/`, {
@@ -49,14 +49,14 @@ describe("invitee placeholder upgrade", () => {
       .get()!;
     expect(rows.n).toBe(1);
 
-    const upgraded = accounts.findById(placeholder.id)!;
+    const upgraded = (await accounts.findById(placeholder.id))!;
     expect(upgraded.isRegistered).toBe(true);
     expect(upgraded.firstname).toBe("Invited");
     expect(await login("invited@example.org", "password123")).toBeTruthy();
   });
 
   test("registration is case-insensitive when matching a placeholder", async () => {
-    const placeholder = accounts.createPlaceholder("Invited@Example.org");
+    const placeholder = await accounts.createPlaceholder("Invited@Example.org");
 
     const res = await post(`${API}/users/`, {
       json: {
@@ -97,19 +97,50 @@ describe("invitee placeholder upgrade", () => {
     // The original credentials still work; nothing was clobbered.
     expect(await login("taken@example.org", "password123")).toBeTruthy();
   });
+
+  test("createOrUpgrade rejects re-registering an already-registered account", async () => {
+    // Exercises the ON CONFLICT(email_lower) DO UPDATE ... WHERE password_hash
+    // IS NULL guard directly: the guard must leave the real account untouched
+    // and reject, not silently overwrite it. authService.register() already
+    // rejects this earlier via a pre-check, so this path is otherwise
+    // untested -- verified empirically against a real constraint violation in
+    // a throwaway script before this rewrite landed (see tasks/plan.md).
+    const newAccount = {
+      email: "taken@example.org",
+      firstname: "First",
+      lastname: "Owner",
+      passwordHash: "irrelevant-hash-1",
+      locale: null,
+      activationCode: null,
+      activatedAt: Date.now(),
+    };
+    await accounts.createOrUpgrade(newAccount);
+
+    await expect(
+      accounts.createOrUpgrade({
+        ...newAccount,
+        firstname: "Second",
+        lastname: "Impostor",
+        passwordHash: "irrelevant-hash-2",
+      }),
+    ).rejects.toThrow(/already registered/);
+
+    const stillOriginal = await accounts.findByEmail("taken@example.org");
+    expect(stillOriginal?.firstname).toBe("First");
+  });
 });
 
 describe("profile column allowlist", () => {
-  test("refuses to write a column outside the allowlist", () => {
-    const user = accounts.createPlaceholder("x@example.org");
+  test("refuses to write a column outside the allowlist", async () => {
+    const user = await accounts.createPlaceholder("x@example.org");
     // The allowlist is what makes the interpolated column name in
     // updateProfileField safe; verify it actually rejects.
-    expect(() =>
+    await expect(
       accounts.updateProfileField(
         user.id,
         "password_hash" as unknown as accounts.ProfileColumn,
         "injected",
       ),
-    ).toThrow(/non-profile column/);
+    ).rejects.toThrow(/non-profile column/);
   });
 });

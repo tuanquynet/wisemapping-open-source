@@ -2,10 +2,11 @@ import * as collaborations from "../db/repos/collaborations.ts";
 import * as history from "../db/repos/history.ts";
 import * as mindmaps from "../db/repos/mindmaps.ts";
 import * as mindmapXml from "../db/repos/mindmapXml.ts";
-import { db } from "../db/client.ts";
+import { dbAdapter } from "../db/client.ts";
 import { isAdmin } from "./authService.ts";
 import {
   assertClosesMapTag,
+  encodeXml,
   validateMindmapXml,
 } from "../domain/mindmapXml.ts";
 import { roleSatisfies, type Role } from "../domain/roles.ts";
@@ -22,17 +23,17 @@ import type { Account, Mindmap } from "../domain/types.ts";
  * `MapPermissionsSecurityAdvice`, `ReadSecurityAdvise`, `UpdateSecurityAdvise`
  * and the 18 `@PreAuthorize` expressions.
  */
-export function hasMapPermission(
+export async function hasMapPermission(
   user: Account | null,
   map: Mindmap,
   required: Role,
-): boolean {
+): Promise<boolean> {
   if (isAdmin(user)) return true;
 
   if (user !== null) {
     if (map.creatorId === user.id) return true;
 
-    const collab = collaborations.findForMapAndAccount(map.id, user.id);
+    const collab = await collaborations.findForMapAndAccount(map.id, user.id);
     if (collab !== null && roleSatisfies(collab.role, required)) return true;
   }
 
@@ -40,12 +41,12 @@ export function hasMapPermission(
 }
 
 /** Rejects a title already used by this creator for another map. */
-export function assertTitleAvailable(
+export async function assertTitleAvailable(
   creatorId: number,
   title: string,
   exceptMapId?: number,
-): void {
-  const existing = mindmaps.findByCreatorAndTitle(creatorId, title);
+): Promise<void> {
+  const existing = await mindmaps.findByCreatorAndTitle(creatorId, title);
   if (existing !== null && existing.id !== exceptMapId) {
     throw new ValidationError(
       { title: "You already have a map with this title." },
@@ -74,26 +75,34 @@ export function requireTitle(title: unknown): string {
  * save writes NO history entry, and a normal save writes one containing the
  * NEW content (history is snapshotted after the update, not before).
  */
-export function saveDocument(
+export async function saveDocument(
   map: Mindmap,
   user: Account,
   xml: string,
   options: { minor: boolean },
-): void {
+): Promise<void> {
   assertClosesMapTag(xml);
 
-  db.transaction(() => {
-    mindmapXml.upsert(map.id, xml);
-    mindmaps.touch(map.id, user.id);
-    if (!options.minor) {
-      history.insert(map.id, user.id, xml);
-    }
-  })();
+  await dbAdapter.batch([
+    {
+      sql: `INSERT INTO mindmap_xml (mindmap_id, xml) VALUES (?1, ?2)
+            ON CONFLICT(mindmap_id) DO UPDATE SET xml = excluded.xml`,
+      params: [map.id, encodeXml(xml)],
+    },
+    {
+      sql: `UPDATE mindmap SET last_editor_id = ?1, edited_at = ?2 WHERE id = ?3`,
+      params: [user.id, Date.now(), map.id],
+    },
+  ]);
+
+  if (!options.minor) {
+    await history.insert(map.id, user.id, xml);
+  }
 }
 
 /** Reads a map's document, treating a missing row as an empty document. */
-export function readXml(mapId: number): string {
-  return mindmapXml.get(mapId) ?? "";
+export async function readXml(mapId: number): Promise<string> {
+  return (await mindmapXml.get(mapId)) ?? "";
 }
 
 export function validateAndNormalizeXml(xml: unknown): string {
@@ -109,26 +118,26 @@ export function validateAndNormalizeXml(xml: unknown): string {
  * action the frontend relies on, so the READ-only requirement is deliberate
  * rather than an oversight.
  */
-export function removeMindmapOrLeave(
+export async function removeMindmapOrLeave(
   map: Mindmap,
   user: Account,
-): "deleted" | "left" | "noop" {
+): Promise<"deleted" | "left" | "noop"> {
   if (map.creatorId === user.id) {
-    mindmaps.deleteById(map.id);
+    await mindmaps.deleteById(map.id);
     return "deleted";
   }
 
-  const collab = collaborations.findForMapAndAccount(map.id, user.id);
+  const collab = await collaborations.findForMapAndAccount(map.id, user.id);
   if (collab !== null) {
-    collaborations.deleteById(collab.id);
+    await collaborations.deleteById(collab.id);
     return "left";
   }
   return "noop";
 }
 
 /** Per-user view state; every caller with a collaboration has one. */
-export function requireOwnCollaboration(mapId: number, user: Account) {
-  const collab = collaborations.findForMapAndAccount(mapId, user.id);
+export async function requireOwnCollaboration(mapId: number, user: Account) {
+  const collab = await collaborations.findForMapAndAccount(mapId, user.id);
   if (collab === null) {
     // Matches the Java "No enough permissions." on the starred endpoints, where
     // an admin or public-map viewer has access but no collaboration row.

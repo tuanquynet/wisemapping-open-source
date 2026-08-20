@@ -1,18 +1,23 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import * as accounts from "../../db/repos/accounts.ts";
 import * as collaborations from "../../db/repos/collaborations.ts";
 import * as history from "../../db/repos/history.ts";
 import * as labels from "../../db/repos/labels.ts";
 import * as mindmaps from "../../db/repos/mindmaps.ts";
-import * as lockManager from "../../services/lockManager.ts";
+import { bunLockManager } from "../../services/lockManager.ts";
+import type { LockManager } from "../../services/lockManager.interface.ts";
 import * as mindmapService from "../../services/mindmapService.ts";
 import { config } from "../../config.ts";
-import { db } from "../../db/client.ts";
+import { dbAdapter } from "../../db/client.ts";
+import type { Statement } from "../../db/adapter.ts";
 import { accepts, parseFilter } from "../../domain/mindmapFilter.ts";
 import { defaultMindmapXml } from "../../domain/mindmapXml.ts";
 import { parseRole } from "../../domain/roles.ts";
-import { DEFAULT_MINDMAP_PROPERTIES } from "../../domain/types.ts";
+import {
+  DEFAULT_MINDMAP_PROPERTIES,
+  type MindmapWithPeople,
+} from "../../domain/types.ts";
 import {
   AccessDeniedError,
   BadRequestError,
@@ -35,6 +40,10 @@ import type { Env } from "../env.ts";
 
 export const mapRoutes = new Hono<Env>();
 
+function resolveLockManager(c: Context<Env>): LockManager {
+  return c.get("lockManager") ?? bunLockManager;
+}
+
 const XML_CONTENT_TYPE = "application/xml; charset=UTF-8";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -49,11 +58,11 @@ async function jsonBody(c: {
 }
 
 /** The caller's per-map view state, defaulted for admins and public viewers. */
-function viewState(
+async function viewState(
   mapId: number,
   userId: number,
-): { properties: string; starred: boolean } {
-  const collab = collaborations.findForMapAndAccount(mapId, userId);
+): Promise<{ properties: string; starred: boolean }> {
+  const collab = await collaborations.findForMapAndAccount(mapId, userId);
   return collab === null
     ? { properties: DEFAULT_MINDMAP_PROPERTIES, starred: false }
     : { properties: collab.mindmapProperties, starred: collab.starred };
@@ -66,11 +75,10 @@ function viewState(
 /**
  * DELETE /maps/batch?ids=1,2,3
  *
- * The Java version wraps the whole loop in a try/catch that rethrows ANY failure
- * as AccessDeniedSecurityException, so a bad id and a permission failure are
- * indistinguishable. One transaction here, so a partial batch cannot commit.
+ * Pre-validates every map id and permission before running deletions,
+ * preserving the property that a bad id or permission failure deletes nothing.
  */
-mapRoutes.delete("/batch", requireUser, (c) => {
+mapRoutes.delete("/batch", requireUser, async (c) => {
   const user = currentUser(c);
   const raw = c.req.query("ids");
   if (raw === undefined || raw === "") {
@@ -82,31 +90,37 @@ mapRoutes.delete("/batch", requireUser, (c) => {
     throw new BadRequestError(`Invalid map ids: ${raw}`);
   }
 
-  db.transaction(() => {
-    for (const id of ids) {
-      const map = mindmaps.findById(id);
-      if (map === null)
-        throw new NotFoundError(`Map with id ${id} could not be found.`);
-      // Deletion requires only READ, as in MindmapServiceImpl.removeMindmap.
-      if (!mindmapService.hasMapPermission(user, map, "viewer")) {
-        throw new AccessDeniedError(`Maps could not be deleted: ${raw}`);
-      }
-      mindmapService.removeMindmapOrLeave(map, user);
+  // Pre-validate all maps and permissions BEFORE any deletion, preserving
+  // the property that a bad id or permission failure deletes nothing.
+  const mapsToDelete: MindmapWithPeople[] = [];
+  for (const id of ids) {
+    const map = await mindmaps.findById(id);
+    if (map === null) {
+      throw new NotFoundError(`Map with id ${id} could not be found.`);
     }
-  })();
+    // Deletion requires only READ, as in MindmapServiceImpl.removeMindmap.
+    if (!(await mindmapService.hasMapPermission(user, map, "viewer"))) {
+      throw new AccessDeniedError(`Maps could not be deleted: ${raw}`);
+    }
+    mapsToDelete.push(map);
+  }
+
+  for (const map of mapsToDelete) {
+    await mindmapService.removeMindmapOrLeave(map, user);
+  }
 
   return c.body(null, 204);
 });
 
 /** GET /maps/ -- the caller's maps, filtered by `?q=`. */
-mapRoutes.get("/", requireUser, (c) => {
+mapRoutes.get("/", requireUser, async (c) => {
   const user = currentUser(c);
 
   // The 500-map cap is applied BEFORE filtering, matching the Java order, so a
   // filter can return fewer results than actually match.
-  const all = mindmaps.listForAccount(user.id, config.mapListMaxSize);
+  const all = await mindmaps.listForAccount(user.id, config.mapListMaxSize);
 
-  const labelRows = labels.listForMaps(
+  const labelRows = await labels.listForMaps(
     all.map((m) => m.id),
     user.id,
   );
@@ -170,16 +184,16 @@ mapRoutes.post("/", requireUser, async (c) => {
   const sourceId = querySourceId || (jsonBody && typeof jsonBody.sourceId === "string" ? jsonBody.sourceId : null);
 
   if (sourceType === "gdrive" && sourceId) {
-    const existing = mindmaps.findByCreatorAndSource(user.id, "gdrive", sourceId);
+    const existing = await mindmaps.findByCreatorAndSource(user.id, "gdrive", sourceId);
     if (existing) {
       if (title && existing.title !== title) {
         try {
-          mindmaps.updateTitle(existing.id, title);
+          await mindmaps.updateTitle(existing.id, title);
         } catch {
           // duplicate title ignored on update
         }
       }
-      mindmaps.touch(existing.id, user.id);
+      await mindmaps.touch(existing.id, user.id);
       c.header("Location", `/api/restful/maps/${existing.id}`);
       c.header("ResourceId", String(existing.id));
       return c.body(null, 201);
@@ -187,22 +201,22 @@ mapRoutes.post("/", requireUser, async (c) => {
   }
 
   let finalTitle = title;
-  const existingTitleMap = mindmaps.findByCreatorAndTitle(user.id, title);
+  const existingTitleMap = await mindmaps.findByCreatorAndTitle(user.id, title);
   if (existingTitleMap) {
     if (sourceType === "gdrive") {
       finalTitle = `${title} (Google Drive)`;
-      if (mindmaps.findByCreatorAndTitle(user.id, finalTitle)) {
+      if (await mindmaps.findByCreatorAndTitle(user.id, finalTitle)) {
         finalTitle = `${title} (${sourceId ? sourceId.substring(0, 6) : Date.now()})`;
       }
     } else {
-      mindmapService.assertTitleAvailable(user.id, title);
+      await mindmapService.assertTitleAvailable(user.id, title);
     }
   }
 
   const xmlContent = bodyText !== "" && !jsonBody ? bodyText : defaultMindmapXml(finalTitle, layout);
   const xml = mindmapService.validateAndNormalizeXml(xmlContent);
 
-  const map = mindmaps.insert(
+  const map = await mindmaps.insert(
     { title: finalTitle, description, creatorId: user.id, isPublic: false, sourceType, sourceId },
     xml,
   );
@@ -236,14 +250,14 @@ mapRoutes.post("/validate-note", requireUser, async (c) => {
 // ---------------------------------------------------------------------------
 
 /** GET /maps/{id} -- note: no `public` or `spamDetected` key. See restMindmap.ts. */
-mapRoutes.get("/:id", requireUser, requireMapAccess("viewer"), (c) => {
+mapRoutes.get("/:id", requireUser, requireMapAccess("viewer"), async (c) => {
   const map = currentMap(c);
   const user = currentUser(c);
-  const state = viewState(map.id, user.id);
+  const state = await viewState(map.id, user.id);
   return c.json(
     toRestMindmap(
       map,
-      mindmapService.readXml(map.id),
+      await mindmapService.readXml(map.id),
       state.properties,
       state.starred,
     ),
@@ -257,21 +271,22 @@ mapRoutes.get("/:id", requireUser, requireMapAccess("viewer"), (c) => {
  * exactly that, since the permission predicate grants viewer access to a public
  * map for a null user.
  */
-mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), (c) => {
+mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), async (c) => {
   const map = currentMap(c);
   const user = c.get("user");
 
   const collab =
-    user === null ? null : collaborations.findForMapAndAccount(map.id, user.id);
+    user === null ? null : await collaborations.findForMapAndAccount(map.id, user.id);
 
   // The holder sees their own lock as absent; only another user's name appears.
-  const lock = lockManager.getLockInfo(map.id);
+  const lock = await resolveLockManager(c).getLockInfo(map.id);
   const lockedByFullName =
     lock !== null && (user === null || lock.userId !== user.id)
       ? lock.userFullName
       : null;
 
   const wantsXml = c.req.query("xml") === "true";
+  const xml = wantsXml ? await mindmapService.readXml(map.id) : undefined;
 
   return c.json(
     toRestMindmapMetadata({
@@ -279,15 +294,15 @@ mapRoutes.get("/:id/metadata", requireMapAccess("viewer"), (c) => {
       properties: collab?.mindmapProperties ?? DEFAULT_MINDMAP_PROPERTIES,
       role: collab?.role ?? null,
       lockedByFullName,
-      ...(wantsXml && { xml: mindmapService.readXml(map.id) }),
+      ...(xml !== undefined && { xml }),
     }),
   );
 });
 
 /** GET /maps/{id}/document/xml and /xml-pub -- public, raw XML body. */
 for (const path of ["/:id/document/xml", "/:id/document/xml-pub"] as const) {
-  mapRoutes.get(path, requireMapAccess("viewer"), (c) =>
-    c.body(mindmapService.readXml(currentMap(c).id), 200, {
+  mapRoutes.get(path, requireMapAccess("viewer"), async (c) =>
+    c.body(await mindmapService.readXml(currentMap(c).id), 200, {
       "Content-Type": XML_CONTENT_TYPE,
     }),
   );
@@ -306,7 +321,7 @@ mapRoutes.put(
   async (c) => {
     const map = currentMap(c);
     const xml = mindmapService.validateAndNormalizeXml(await c.req.text());
-    mindmapService.saveDocument(map, currentUser(c), xml, { minor: false });
+    await mindmapService.saveDocument(map, currentUser(c), xml, { minor: false });
     return c.body(null, 200);
   },
 );
@@ -330,19 +345,17 @@ mapRoutes.put(
       throw new BadRequestError("Map properties can not be null");
     }
 
-    lockManager.lock(map, user);
+    await resolveLockManager(c).lock(map, user);
 
     const xml = mindmapService.validateAndNormalizeXml(body.xml);
     const minor = c.req.query("minor") === "true";
 
-    db.transaction(() => {
-      collaborations.updateProperties(
-        map.id,
-        user.id,
-        body.properties as string,
-      );
-      mindmapService.saveDocument(map, user, xml, { minor });
-    })();
+    await collaborations.updateProperties(
+      map.id,
+      user.id,
+      body.properties,
+    );
+    await mindmapService.saveDocument(map, user, xml, { minor });
 
     return c.body(null, 204);
   },
@@ -359,22 +372,20 @@ mapRoutes.put("/:id", requireUser, requireMapAccess("editor"), async (c) => {
   const xml =
     typeof body.xml === "string" && body.xml !== ""
       ? mindmapService.validateAndNormalizeXml(body.xml)
-      : mindmapService.readXml(map.id);
+      : await mindmapService.readXml(map.id);
 
-  db.transaction(() => {
-    if (typeof body.title === "string" && body.title !== map.title) {
-      const title = mindmapService.requireTitle(body.title);
-      mindmapService.assertTitleAvailable(user.id, title, map.id);
-      mindmaps.updateTitle(map.id, title);
-    }
-    if (typeof body.description === "string") {
-      mindmaps.updateDescription(map.id, body.description);
-    }
-    if (typeof body.properties === "string") {
-      collaborations.updateProperties(map.id, user.id, body.properties);
-    }
-    mindmapService.saveDocument(map, user, xml, { minor });
-  })();
+  if (typeof body.title === "string" && body.title !== map.title) {
+    const title = mindmapService.requireTitle(body.title);
+    await mindmapService.assertTitleAvailable(user.id, title, map.id);
+    await mindmaps.updateTitle(map.id, title);
+  }
+  if (typeof body.description === "string") {
+    await mindmaps.updateDescription(map.id, body.description);
+  }
+  if (typeof body.properties === "string") {
+    await collaborations.updateProperties(map.id, user.id, body.properties);
+  }
+  await mindmapService.saveDocument(map, user, xml, { minor });
 
   return c.body(null, 204);
 });
@@ -389,8 +400,8 @@ mapRoutes.put(
     const user = currentUser(c);
     const title = mindmapService.requireTitle(await c.req.text());
 
-    mindmapService.assertTitleAvailable(user.id, title, map.id);
-    mindmaps.updateTitle(map.id, title);
+    await mindmapService.assertTitleAvailable(user.id, title, map.id);
+    await mindmaps.updateTitle(map.id, title);
     return c.body(null, 204);
   },
 );
@@ -401,7 +412,7 @@ mapRoutes.put(
   requireUser,
   requireMapAccess("editor"),
   async (c) => {
-    mindmaps.updateDescription(currentMap(c).id, await c.req.text());
+    await mindmaps.updateDescription(currentMap(c).id, await c.req.text());
     return c.body(null, 204);
   },
 );
@@ -416,7 +427,7 @@ mapRoutes.put(
     if (typeof body.isPublic !== "boolean") {
       throw new BadRequestError("Map properties can not be null");
     }
-    mindmaps.updatePublic(currentMap(c).id, body.isPublic);
+    await mindmaps.updatePublic(currentMap(c).id, body.isPublic);
     return c.body(null, 204);
   },
 );
@@ -427,8 +438,8 @@ mapRoutes.put(
  * Requires only viewer: the creator deletes the map, anyone else leaves it. This
  * is the Java behaviour and the frontend's "remove from my list" action.
  */
-mapRoutes.delete("/:id", requireUser, requireMapAccess("viewer"), (c) => {
-  mindmapService.removeMindmapOrLeave(currentMap(c), currentUser(c));
+mapRoutes.delete("/:id", requireUser, requireMapAccess("viewer"), async (c) => {
+  await mindmapService.removeMindmapOrLeave(currentMap(c), currentUser(c));
   return c.body(null, 204);
 });
 
@@ -439,13 +450,13 @@ mapRoutes.post("/:id", requireUser, requireMapAccess("viewer"), async (c) => {
   const body = await jsonBody(c);
 
   const title = mindmapService.requireTitle(body.title);
-  mindmapService.assertTitleAvailable(user.id, title);
+  await mindmapService.assertTitleAvailable(user.id, title);
 
   const description =
     typeof body.description === "string" ? body.description : null;
-  const copy = mindmaps.insert(
+  const copy = await mindmaps.insert(
     { title, description, creatorId: user.id, isPublic: false },
-    mindmapService.readXml(source.id),
+    await mindmapService.readXml(source.id),
   );
 
   c.header("Location", `/api/restful/maps/${copy.id}`);
@@ -465,18 +476,18 @@ mapRoutes.put(
   async (c) => {
     const map = currentMap(c);
     const user = currentUser(c);
-    mindmapService.requireOwnCollaboration(map.id, user);
+    await mindmapService.requireOwnCollaboration(map.id, user);
 
     // Boolean.parseBoolean semantics: anything not "true" is false.
     const starred = (await c.req.text()).trim().toLowerCase() === "true";
-    collaborations.updateStarred(map.id, user.id, starred);
+    await collaborations.updateStarred(map.id, user.id, starred);
     return c.body(null, 204);
   },
 );
 
 /** GET /maps/{id}/starred -- text/plain "true"/"false", NOT JSON. */
-mapRoutes.get("/:id/starred", requireUser, requireMapAccess("viewer"), (c) => {
-  const collab = mindmapService.requireOwnCollaboration(
+mapRoutes.get("/:id/starred", requireUser, requireMapAccess("viewer"), async (c) => {
+  const collab = await mindmapService.requireOwnCollaboration(
     currentMap(c).id,
     currentUser(c),
   );
@@ -488,10 +499,10 @@ mapRoutes.get("/:id/starred", requireUser, requireMapAccess("viewer"), (c) => {
 // ---------------------------------------------------------------------------
 
 /** GET /maps/{id}/history/ -- newest first, capped at 30. */
-mapRoutes.get("/:id/history", requireUser, requireMapAccess("viewer"), (c) => {
-  const changes = history
-    .listForMap(currentMap(c).id)
-    .map(toRestMindmapHistory);
+mapRoutes.get("/:id/history", requireUser, requireMapAccess("viewer"), async (c) => {
+  const changes = (await history.listForMap(currentMap(c).id)).map(
+    toRestMindmapHistory,
+  );
   return c.json({ count: changes.length, changes });
 });
 
@@ -500,14 +511,14 @@ mapRoutes.get(
   "/:id/:hid/document/xml",
   requireUser,
   requireMapAccess("viewer"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const hid = Number(c.req.param("hid"));
     if (!Number.isInteger(hid)) {
       throw new BadRequestError(`Invalid history id: ${c.req.param("hid")}`);
     }
 
-    const xml = history.findByIdWithinCap(map.id, hid);
+    const xml = await history.findByIdWithinCap(map.id, hid);
     if (xml === null) {
       throw new NotFoundError(
         `History could not be found for mapid=${map.id}, hid=${hid}`,
@@ -530,16 +541,16 @@ mapRoutes.post(
   "/:id/history/:hid",
   requireUser,
   requireMapAccess("editor"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const user = currentUser(c);
     const hid = c.req.param("hid");
 
     if (hid === "latest") {
-      const xml = history.latestXml(map.id);
+      const xml = await history.latestXml(map.id);
       // No history yet is a silent no-op in Java (`if (size > 0)`).
       if (xml !== null) {
-        mindmapService.saveDocument(map, user, xml, { minor: true });
+        await mindmapService.saveDocument(map, user, xml, { minor: true });
       }
       return c.body(null, 204);
     }
@@ -549,13 +560,13 @@ mapRoutes.post(
       throw new BadRequestError(`Invalid history id: ${hid}`);
     }
 
-    const xml = history.findByIdWithinCap(map.id, historyId);
+    const xml = await history.findByIdWithinCap(map.id, historyId);
     if (xml === null) {
       throw new NotFoundError(
         `History could not be found for mapid=${map.id}, hid=${historyId}`,
       );
     }
-    mindmapService.saveDocument(map, user, xml, { minor: false });
+    await mindmapService.saveDocument(map, user, xml, { minor: false });
     return c.body(null, 204);
   },
 );
@@ -579,11 +590,11 @@ mapRoutes.post(
       throw new BadRequestError("A label id is required.");
     }
 
-    if (labels.findByIdForAccount(labelId, user.id) === null) {
+    if ((await labels.findByIdForAccount(labelId, user.id)) === null) {
       throw new NotFoundError(`Label could not be found. Id: ${labelId}`);
     }
 
-    labels.linkToMap(map.id, labelId);
+    await labels.linkToMap(map.id, labelId);
     return c.body(null, 200);
   },
 );
@@ -593,21 +604,21 @@ mapRoutes.delete(
   "/:id/labels/:lid",
   requireUser,
   requireMapAccess("editor"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const user = currentUser(c);
     const labelId = Number(c.req.param("lid"));
 
     if (
       !Number.isInteger(labelId) ||
-      labels.findByIdForAccount(labelId, user.id) === null
+      (await labels.findByIdForAccount(labelId, user.id)) === null
     ) {
       throw new NotFoundError(
         `Label could not be found. Id: ${c.req.param("lid")}`,
       );
     }
 
-    labels.unlinkFromMap(map.id, labelId);
+    await labels.unlinkFromMap(map.id, labelId);
     return c.body(null, 204);
   },
 );
@@ -627,15 +638,18 @@ function parseCollabs(body: Record<string, unknown>): {
 } {
   const raw = Array.isArray(body.collaborations) ? body.collaborations : null;
   if (raw === null) {
-    throw new BadRequestError("A collaborations array is required.");
+    throw new BadRequestError("collaborations must be an array");
   }
 
   const collabs: ParsedCollab[] = [];
   const invalidEmails: string[] = [];
 
-  for (const entry of raw) {
-    const item = (entry ?? {}) as Record<string, unknown>;
-    const email = typeof item.email === "string" ? item.email.trim() : "";
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) {
+      throw new BadRequestError("invalid collaboration entry");
+    }
+    const email =
+      typeof item.email === "string" ? item.email.trim() : "";
     if (!EMAIL_RE.test(email)) {
       invalidEmails.push(email);
       continue;
@@ -662,15 +676,26 @@ function parseCollabs(body: Record<string, unknown>): {
   return { collabs };
 }
 
-/** Resolves an email to an account, creating an invitee placeholder if needed. */
-function resolveCollaborator(email: string): number {
-  const existing = accounts.findByEmail(email);
-  return existing !== null ? existing.id : accounts.createPlaceholder(email).id;
+/**
+ * Resolves an email to an account, creating an invitee placeholder if needed.
+ *
+ * `async` since Task 2.2 ported `accounts.ts` off `bun:sqlite` -- it can no
+ * longer run inside `db.transaction()`'s synchronous callback below, so both
+ * call sites resolve every collaborator's account id *before* opening the
+ * transaction and use the pre-resolved ids inside it. This is the same
+ * pre-read-before-write restructuring Task 4.2 will apply throughout this
+ * file once `collaborations.ts`/`mindmaps.ts` are themselves ported
+ * (Architecture Decision 2, tasks/plan.md); it lands here first because the
+ * compiler forces it the moment `accounts.ts` becomes async.
+ */
+async function resolveCollaborator(email: string): Promise<number> {
+  const existing = await accounts.findByEmail(email);
+  return existing !== null ? existing.id : (await accounts.createPlaceholder(email)).id;
 }
 
 /** GET /maps/{id}/collabs */
-mapRoutes.get("/:id/collabs", requireUser, requireMapAccess("viewer"), (c) =>
-  c.json(toRestCollaborationList(collaborations.listForMap(currentMap(c).id))),
+mapRoutes.get("/:id/collabs", requireUser, requireMapAccess("viewer"), async (c) =>
+  c.json(toRestCollaborationList(await collaborations.listForMap(currentMap(c).id))),
 );
 
 /**
@@ -689,20 +714,41 @@ mapRoutes.post(
 
     const keep = new Set(collabs.map((x) => x.email.toLowerCase()));
 
-    db.transaction(() => {
-      for (const existing of collaborations.listForMap(map.id)) {
-        if (
-          existing.role !== "owner" &&
-          !keep.has(existing.email.toLowerCase())
-        ) {
-          collaborations.deleteById(existing.id);
-        }
+    // Resolve every non-owner email to an account id before the batch write
+    // -- resolveCollaborator may write a placeholder row, so it cannot run
+    // inside a batch statement array.
+    const resolvedIds = new Map<string, number>();
+    for (const { email } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
+      resolvedIds.set(email, await resolveCollaborator(email));
+    }
+
+    const existingCollabs = await collaborations.listForMap(map.id);
+    const statements: Statement[] = [];
+    for (const existing of existingCollabs) {
+      if (
+        existing.role !== "owner" &&
+        !keep.has(existing.email.toLowerCase())
+      ) {
+        statements.push({
+          sql: `DELETE FROM collaboration WHERE id = ?1`,
+          params: [existing.id],
+        });
       }
-      for (const { email, role } of collabs) {
-        if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
-        collaborations.upsert(map.id, resolveCollaborator(email), role);
-      }
-    })();
+    }
+    const now = Date.now();
+    for (const { email, role } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
+      statements.push({
+        sql: `INSERT INTO collaboration (mindmap_id, account_id, role, starred, created_at)
+              VALUES (?1, ?2, ?3, 0, ?4)
+              ON CONFLICT(mindmap_id, account_id) DO UPDATE SET role = excluded.role`,
+        params: [map.id, resolvedIds.get(email)!, role, now],
+      });
+    }
+    if (statements.length > 0) {
+      await dbAdapter.batch(statements);
+    }
 
     return c.body(null, 204);
   },
@@ -717,18 +763,35 @@ mapRoutes.put(
     const map = currentMap(c);
     const { collabs } = parseCollabs(await jsonBody(c));
 
-    db.transaction(() => {
-      for (const { email, role } of collabs) {
-        if (email.toLowerCase() === map.creatorEmail.toLowerCase()) {
-          throw new ConflictError(`The user ${email} is the owner`);
-        }
-        const existing = collaborations.findByEmail(map.id, email);
-        if (existing !== null && existing.role === "owner") {
-          throw new ConflictError(`Ownership can not be modified: ${email}`);
-        }
-        collaborations.upsert(map.id, resolveCollaborator(email), role);
+    // Same pre-resolution as above; also skips the owner's own email so a
+    // rejected request (see the ConflictError below) never creates an
+    // unwanted placeholder row for it.
+    const resolvedIds = new Map<string, number>();
+    for (const { email } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) continue;
+      resolvedIds.set(email, await resolveCollaborator(email));
+    }
+
+    const statements: Statement[] = [];
+    const now = Date.now();
+    for (const { email, role } of collabs) {
+      if (email.toLowerCase() === map.creatorEmail.toLowerCase()) {
+        throw new ConflictError(`The user ${email} is the owner`);
       }
-    })();
+      const existing = await collaborations.findByEmail(map.id, email);
+      if (existing !== null && existing.role === "owner") {
+        throw new ConflictError(`Ownership can not be modified: ${email}`);
+      }
+      statements.push({
+        sql: `INSERT INTO collaboration (mindmap_id, account_id, role, starred, created_at)
+              VALUES (?1, ?2, ?3, 0, ?4)
+              ON CONFLICT(mindmap_id, account_id) DO UPDATE SET role = excluded.role`,
+        params: [map.id, resolvedIds.get(email)!, role, now],
+      });
+    }
+    if (statements.length > 0) {
+      await dbAdapter.batch(statements);
+    }
 
     return c.body(null, 204);
   },
@@ -739,7 +802,7 @@ mapRoutes.delete(
   "/:id/collabs",
   requireUser,
   requireMapAccess("owner"),
-  (c) => {
+  async (c) => {
     const map = currentMap(c);
     const email = c.req.query("email") ?? "";
 
@@ -750,12 +813,12 @@ mapRoutes.delete(
       );
     }
 
-    const collab = collaborations.findByEmail(map.id, email);
+    const collab = await collaborations.findByEmail(map.id, email);
     if (collab !== null) {
       if (collab.role === "owner") {
         throw new ConflictError("Can not remove owner collab");
       }
-      collaborations.deleteById(collab.id);
+      await collaborations.deleteById(collab.id);
     }
     // A missing collaboration is a silent no-op, as in Java.
     return c.body(null, 204);
@@ -782,12 +845,11 @@ mapRoutes.put(
     const wantsLock = (await c.req.text()).trim().toLowerCase() === "true";
 
     if (!wantsLock) {
-      lockManager.unlock(map, user);
+      await resolveLockManager(c).unlock(map, user);
       return c.body(null, 204);
     }
 
-    lockManager.lock(map, user);
+    await resolveLockManager(c).lock(map, user);
     return c.json({ email: user.email }, 200);
   },
 );
-
