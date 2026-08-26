@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 
 import schemaSql from "./schema.sql" with { type: "text" };
+import addCommentsSql from "../../migrations/0002_add_comments.sql" with { type: "text" };
 
 /**
  * Migrations, versioned with `PRAGMA user_version`.
@@ -10,7 +11,10 @@ import schemaSql from "./schema.sql" with { type: "text" };
  * applied inside a transaction, so a failure leaves user_version untouched.
  */
 const steps: readonly { readonly description: string; readonly sql: string }[] =
-  [{ description: "base schema", sql: schemaSql }];
+  [
+    { description: "base schema", sql: schemaSql },
+    { description: "add comment table", sql: addCommentsSql },
+  ];
 export function migrate(db: Database): void {
   const current = db
     .query<{ user_version: number }, []>("PRAGMA user_version")

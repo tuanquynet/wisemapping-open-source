@@ -1,3 +1,5 @@
+import { commentRoutes } from "./comments.ts";
+
 import { Hono, type Context } from "hono";
 
 import * as accounts from "../../db/repos/accounts.ts";
@@ -853,3 +855,9 @@ mapRoutes.put(
     return c.json({ email: user.email }, 200);
   },
 );
+
+// ---------------------------------------------------------------------------
+// Comments -- mounted last so /:id is not swallowed by a more specific path
+// ---------------------------------------------------------------------------
+
+mapRoutes.route("/:id/comments", commentRoutes);

@@ -14,6 +14,7 @@ describe("schema", () => {
     expect(tableNames(db)).toEqual([
       "account",
       "collaboration",
+      "comment",
       "mindmap",
       "mindmap_history",
       "mindmap_label",
@@ -31,7 +32,7 @@ describe("schema", () => {
     expect(names).toContain("ix_history_map_created");
     expect(names).toContain("ux_collab_map_account");
     expect(names).toContain("ux_account_email_lower");
-    expect(names).toContain("ux_collab_one_owner");
+    expect(names).toContain("ix_comment_map_topic_created");
     db.close();
   });
 
@@ -45,11 +46,11 @@ describe("schema", () => {
 
   test("migration is idempotent and records its version", () => {
     const db = freshDb();
-    expect(userVersion(db)).toBe(1);
+    expect(userVersion(db)).toBe(2);
     // Re-running must be a no-op rather than an error.
     const { migrate } = require("../src/db/migrate.ts");
     migrate(db);
-    expect(userVersion(db)).toBe(1);
+    expect(userVersion(db)).toBe(2);
     db.close();
   });
 });
