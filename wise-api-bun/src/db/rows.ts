@@ -59,3 +59,12 @@ export interface CollaborationRow {
   mindmap_properties: string | null;
   created_at: number;
 }
+
+export interface CommentRow {
+  id: number;
+  mindmap_id: number;
+  topic_id: string;
+  author_id: number;
+  body: string;
+  created_at: number;
+}
