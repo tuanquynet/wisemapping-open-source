@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { API, get, json } from "./helpers/client.ts";
+import { API, del, get, json, put } from "./helpers/client.ts";
 import { createUser } from "./helpers/auth.ts";
 import { createMap } from "./helpers/maps.ts";
 import { resetDb } from "./helpers/db.ts";
@@ -174,5 +174,91 @@ describe("GET /api/restful/admin/maps/:id/xml", () => {
     const xml = await res.text();
     expect(xml).toContain("<map");
     expect(xml).toContain("</map>");
+  });
+});
+
+describe("PUT /api/restful/admin/maps/:id", () => {
+  test("401s when not authenticated", async () => {
+    const res = await put(`${API}/admin/maps/1`, { json: { title: "New" } });
+    expect(res.status).toBe(401);
+  });
+
+  test("403s when authenticated as non-admin", async () => {
+    const user = await createUser();
+    const res = await put(`${API}/admin/maps/1`, {
+      headers: user.authHeaders,
+      json: { title: "New" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("404s when map does not exist", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await put(`${API}/admin/maps/999999`, {
+      headers: admin.authHeaders,
+      json: { title: "New" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("updates map title, description, and isPublic", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const user = await createUser();
+    const mapId = await createMap(user, "Initial Title");
+
+    const res = await put(`${API}/admin/maps/${mapId}`, {
+      headers: admin.authHeaders,
+      json: {
+        title: "Updated Title by Admin",
+        description: "Admin modified description",
+        isPublic: true,
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const body = await json(res);
+    expect(body.title).toBe("Updated Title by Admin");
+    expect(body.description).toBe("Admin modified description");
+    expect(body.isPublic).toBe(true);
+  });
+});
+
+describe("DELETE /api/restful/admin/maps/:id", () => {
+  test("401s when not authenticated", async () => {
+    const res = await del(`${API}/admin/maps/1`);
+    expect(res.status).toBe(401);
+  });
+
+  test("403s when authenticated as non-admin", async () => {
+    const user = await createUser();
+    const res = await del(`${API}/admin/maps/1`, {
+      headers: user.authHeaders,
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("404s when map does not exist", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await del(`${API}/admin/maps/999999`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("deletes mindmap and cascades records returning 204", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const user = await createUser();
+    const mapId = await createMap(user, "Map To Be Deleted");
+
+    const res = await del(`${API}/admin/maps/${mapId}`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(204);
+
+    // Map should no longer exist
+    const getRes = await get(`${API}/admin/maps/${mapId}/xml`, {
+      headers: admin.authHeaders,
+    });
+    expect(getRes.status).toBe(404);
   });
 });

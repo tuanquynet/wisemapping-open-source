@@ -415,3 +415,62 @@ adminRoutes.get("/maps/:id/xml", async (c) => {
   c.header("Content-Type", "application/xml; charset=UTF-8");
   return c.body(xml, 200);
 });
+
+/**
+ * PUT /api/restful/admin/maps/:id
+ *
+ * Update map title, description, and/or public status.
+ */
+adminRoutes.put("/maps/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("Map could not be found", 404);
+  }
+
+  const map = await mindmaps.findById(id);
+  if (map === null) {
+    return c.text("Map could not be found", 404);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = ((await c.req.json()) ?? {}) as Record<string, unknown>;
+  } catch {
+    throw new BadRequestError("A JSON body is required.");
+  }
+
+  if (typeof body.title === "string" && body.title.trim() !== "") {
+    await mindmaps.updateTitle(id, body.title.trim());
+  }
+  if (typeof body.description === "string") {
+    await mindmaps.updateDescription(id, body.description.trim());
+  }
+  if (typeof body.isPublic === "boolean") {
+    await mindmaps.updatePublic(id, body.isPublic);
+  } else if (typeof body.public === "boolean") {
+    await mindmaps.updatePublic(id, body.public);
+  }
+
+  const updated = await mindmaps.findById(id);
+  return c.json(toAdminRestMap(updated ?? map));
+});
+
+/**
+ * DELETE /api/restful/admin/maps/:id
+ *
+ * Delete a mindmap across the entire system.
+ */
+adminRoutes.delete("/maps/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("Map could not be found", 404);
+  }
+
+  const map = await mindmaps.findById(id);
+  if (map === null) {
+    return c.text("Map could not be found", 404);
+  }
+
+  await mindmaps.deleteById(id);
+  return c.body(null, 204);
+});
