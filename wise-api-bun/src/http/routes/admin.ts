@@ -5,6 +5,7 @@ import * as mindmaps from "../../db/repos/mindmaps.ts";
 import { isAdmin } from "../../services/authService.ts";
 import { requireAdmin } from "../middleware/requireAdmin.ts";
 import { toRestUser, type RestUser } from "../dto/restUser.ts";
+import { toAdminRestMap, type AdminRestMap } from "../dto/adminRestMap.ts";
 import { bunPasswordHasher, type PasswordHasher } from "../../util/passwordHash.ts";
 import { BadRequestError } from "../../domain/errors.ts";
 import type { Env } from "../env.ts";
@@ -291,4 +292,69 @@ adminRoutes.put("/users/:id/activate", async (c) => {
 
   await accounts.activate(id);
   return c.body(null, 204);
+});
+
+/**
+ * GET /api/restful/admin/maps
+ *
+ * Query params:
+ *   page: 0-indexed page number (default 0)
+ *   pageSize: items per page (default 10, max 200)
+ *   search: title / description query substring
+ *   sortBy: title, creationDate, lastModificationTime
+ *   sortOrder: 'asc' | 'desc'
+ *   filterPublic: 'true' | 'false'
+ */
+adminRoutes.get("/maps", async (c) => {
+  const pageRaw = c.req.query("page");
+  const pageSizeRaw = c.req.query("pageSize");
+  const search = c.req.query("search");
+  const sortBy = c.req.query("sortBy");
+  const sortOrder = c.req.query("sortOrder") as "asc" | "desc" | undefined;
+  const filterPublicRaw = c.req.query("filterPublic");
+
+  const page = Math.max(0, pageRaw ? parseInt(pageRaw, 10) || 0 : 0);
+  const pageSize = Math.min(
+    200,
+    Math.max(1, pageSizeRaw ? parseInt(pageSizeRaw, 10) || 10 : 10),
+  );
+
+  let filterPublic: boolean | undefined;
+  if (filterPublicRaw === "true") {
+    filterPublic = true;
+  } else if (filterPublicRaw === "false") {
+    filterPublic = false;
+  }
+
+  const filterOpts: mindmaps.MindmapFilterOptions = {
+    page,
+    pageSize,
+    search,
+    sortBy,
+    sortOrder,
+    filterPublic,
+  };
+
+  const [mapList, totalElements] = await Promise.all([
+    mindmaps.findWithFilters(filterOpts),
+    mindmaps.countWithFilters(filterOpts),
+  ]);
+
+  const totalPages = Math.ceil(totalElements / pageSize);
+  const hasNext = page < totalPages - 1;
+  const hasPrevious = page > 0;
+
+  const data: AdminRestMap[] = mapList.map((m) => toAdminRestMap(m));
+
+  const response: PaginatedResponse<AdminRestMap> = {
+    data,
+    page,
+    pageSize,
+    totalElements,
+    totalPages,
+    hasNext,
+    hasPrevious,
+  };
+
+  return c.json(response);
 });
