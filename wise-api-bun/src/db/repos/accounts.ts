@@ -206,3 +206,83 @@ export async function passwordHashOf(id: number): Promise<string | null> {
   );
   return row?.password_hash ?? null;
 }
+
+export interface AccountFilterOptions {
+  search?: string | undefined;
+  filterActive?: boolean | undefined;
+  sortBy?: string | undefined;
+  sortOrder?: "asc" | "desc" | undefined;
+  page?: number | undefined;
+  pageSize?: number | undefined;
+}
+
+const ALLOWED_SORT_COLUMNS: Record<string, string> = {
+  id: "id",
+  email: "email_lower",
+  firstname: "firstname",
+  lastname: "lastname",
+  creationdate: "created_at",
+  createdat: "created_at",
+};
+
+function buildFilterClauses(opts: AccountFilterOptions): {
+  where: string;
+  params: unknown[];
+} {
+  const conditions: string[] = ["password_hash IS NOT NULL"];
+  const params: unknown[] = [];
+
+  if (opts.search && opts.search.trim() !== "") {
+    const pattern = `%${opts.search.trim().toLowerCase()}%`;
+    params.push(pattern, pattern, pattern);
+    const p1 = params.length - 2;
+    const p2 = params.length - 1;
+    const p3 = params.length;
+    conditions.push(
+      `(email_lower LIKE ?${p1} OR LOWER(COALESCE(firstname, '')) LIKE ?${p2} OR LOWER(COALESCE(lastname, '')) LIKE ?${p3})`,
+    );
+  }
+
+  if (opts.filterActive !== undefined) {
+    if (opts.filterActive) {
+      conditions.push("activated_at IS NOT NULL");
+    } else {
+      conditions.push("activated_at IS NULL");
+    }
+  }
+
+  return {
+    where: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
+    params,
+  };
+}
+
+export async function findWithFilters(
+  opts: AccountFilterOptions,
+): Promise<Account[]> {
+  const { where, params } = buildFilterClauses(opts);
+  const sortCol =
+    ALLOWED_SORT_COLUMNS[opts.sortBy?.toLowerCase() ?? ""] ?? "created_at";
+  const sortDir = opts.sortOrder?.toLowerCase() === "desc" ? "DESC" : "ASC";
+
+  const page = Math.max(0, opts.page ?? 0);
+  const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? 10));
+  const offset = page * pageSize;
+
+  const limitParamIdx = params.length + 1;
+  const offsetParamIdx = params.length + 2;
+  const queryParams = [...params, pageSize, offset];
+
+  const sql = `${SELECT} ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ?${limitParamIdx} OFFSET ?${offsetParamIdx}`;
+  const rows = await dbAdapter.all<AccountRow>(sql, queryParams);
+  return rows.map(toAccount);
+}
+
+export async function countWithFilters(
+  opts: AccountFilterOptions,
+): Promise<number> {
+  const { where, params } = buildFilterClauses(opts);
+  const sql = `SELECT COUNT(*) as count FROM account ${where}`;
+  const row = await dbAdapter.get<{ count: number }>(sql, params);
+  return row?.count ?? 0;
+}

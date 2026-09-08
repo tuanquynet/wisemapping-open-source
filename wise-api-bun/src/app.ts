@@ -5,6 +5,7 @@ import { config } from "./config.ts";
 import { errorHandler } from "./http/middleware/errorHandler.ts";
 import { jwt } from "./http/middleware/jwt.ts";
 import { accountRoutes } from "./http/routes/account.ts";
+import { adminRoutes } from "./http/routes/admin.ts";
 import { appRoutes } from "./http/routes/app.ts";
 import { authRoutes } from "./http/routes/auth.ts";
 import { labelRoutes } from "./http/routes/labels.ts";
@@ -57,6 +58,7 @@ app.route("/api/restful/account", accountRoutes);
 app.route("/api/restful/users", userRoutes);
 app.route("/api/restful/maps", mapRoutes);
 app.route("/api/restful/labels", labelRoutes);
+app.route("/api/restful/admin", adminRoutes);
 // authRoutes owns /authenticate and /logout, which sit directly under /restful.
 app.route("/api/restful", authRoutes);
 
