@@ -91,6 +91,14 @@ export async function findByCreatorAndSource(
   return row === null ? null : toMindmap(row);
 }
 
+export async function findByCreator(creatorId: number): Promise<Mindmap[]> {
+  const rows = await dbAdapter.all<MindmapRow>(
+    `SELECT * FROM mindmap WHERE creator_id = ?1`,
+    [creatorId],
+  );
+  return rows.map(toMindmap);
+}
+
 export interface ListedMindmap extends MindmapWithPeople {
   myRole: Role;
   myStarred: boolean;
@@ -227,4 +235,80 @@ export async function touch(id: number, editorId: number): Promise<void> {
 export async function deleteById(id: number): Promise<void> {
   // XML, history, collaborations and label links all go via ON DELETE CASCADE.
   await dbAdapter.run(`DELETE FROM mindmap WHERE id = ?1`, [id]);
+}
+
+export interface MindmapFilterOptions {
+  search?: string | undefined;
+  filterPublic?: boolean | undefined;
+  sortBy?: string | undefined;
+  sortOrder?: "asc" | "desc" | undefined;
+  page?: number | undefined;
+  pageSize?: number | undefined;
+}
+
+const ALLOWED_MAP_SORT_COLUMNS: Record<string, string> = {
+  id: "m.id",
+  title: "LOWER(m.title)",
+  creationdate: "m.created_at",
+  createdat: "m.created_at",
+  creationtime: "m.created_at",
+  editedat: "m.edited_at",
+  lastmodificationtime: "m.edited_at",
+};
+
+function buildMapFilterClauses(opts: MindmapFilterOptions): {
+  where: string;
+  params: unknown[];
+} {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts.search && opts.search.trim() !== "") {
+    const pattern = `%${opts.search.trim().toLowerCase()}%`;
+    params.push(pattern, pattern);
+    const p1 = params.length - 1;
+    const p2 = params.length;
+    conditions.push(
+      `(LOWER(m.title) LIKE ?${p1} OR LOWER(COALESCE(m.description, '')) LIKE ?${p2})`,
+    );
+  }
+
+  if (opts.filterPublic !== undefined) {
+    params.push(opts.filterPublic ? 1 : 0);
+    conditions.push(`m.is_public = ?${params.length}`);
+  }
+
+  return {
+    where: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
+    params,
+  };
+}
+
+export async function findWithFilters(
+  opts: MindmapFilterOptions,
+): Promise<MindmapWithPeople[]> {
+  const { where, params } = buildMapFilterClauses(opts);
+  const sortCol =
+    ALLOWED_MAP_SORT_COLUMNS[opts.sortBy?.toLowerCase() ?? ""] ?? "m.created_at";
+  const sortDir = opts.sortOrder?.toLowerCase() === "desc" ? "DESC" : "ASC";
+
+  const page = Math.max(0, opts.page ?? 0);
+  const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? 10));
+  const offset = page * pageSize;
+
+  const limitParamIdx = params.length + 1;
+  const offsetParamIdx = params.length + 2;
+  const queryParams = [...params, pageSize, offset];
+  const sql = `SELECT ${PEOPLE_COLUMNS} ${PEOPLE_JOIN} ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ?${limitParamIdx} OFFSET ?${offsetParamIdx}`;
+  const rows = await dbAdapter.all<MindmapPeopleRow>(sql, queryParams);
+  return rows.map(toWithPeople);
+}
+
+export async function countWithFilters(
+  opts: MindmapFilterOptions,
+): Promise<number> {
+  const { where, params } = buildMapFilterClauses(opts);
+  const sql = `SELECT COUNT(*) as count FROM mindmap m ${where}`;
+  const row = await dbAdapter.get<{ count: number }>(sql, params);
+  return row?.count ?? 0;
 }
