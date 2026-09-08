@@ -83,3 +83,103 @@ describe("GET /api/restful/admin/users", () => {
     expect(emails).toEqual(sorted);
   });
 });
+
+describe("GET /api/restful/admin/users/:id", () => {
+  test("401s when not authenticated", async () => {
+    const res = await get(`${API}/admin/users/1`);
+    expect(res.status).toBe(401);
+    expect(await json(res)).toEqual({ msg: "Unauthorized" });
+  });
+
+  test("403s when authenticated as regular user", async () => {
+    const user = await createUser();
+    const res = await get(`${API}/admin/users/1`, { headers: user.authHeaders });
+    expect(res.status).toBe(403);
+  });
+
+  test("404s when user does not exist", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await get(`${API}/admin/users/999999`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("returns user details for valid ID", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const target = await createUser({
+      firstname: "Bob",
+      lastname: "Builder",
+      email: "bob@example.org",
+    });
+
+    // Get target's ID from admin user list first
+    const listRes = await get(`${API}/admin/users?search=bob@example.org`, {
+      headers: admin.authHeaders,
+    });
+    const listBody = await json(listRes);
+    const users = listBody.data as Array<Record<string, unknown>>;
+    const targetId = Number(users[0]?.id);
+    expect(targetId).toBeGreaterThan(0);
+
+    const res = await get(`${API}/admin/users/${targetId}`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(200);
+
+    const body = await json(res);
+    expect(body.id).toBe(targetId);
+    expect(body.email).toBe("bob@example.org");
+    expect(body.firstname).toBe("Bob");
+    expect(body.lastname).toBe("Builder");
+    expect(body.fullName).toBe("Bob Builder");
+    expect(body.isActive).toBe(true);
+    expect(body.isAdmin).toBe(false);
+  });
+});
+
+describe("GET /api/restful/admin/users/email/:email", () => {
+  test("401s when not authenticated", async () => {
+    const res = await get(`${API}/admin/users/email/test@example.org`);
+    expect(res.status).toBe(401);
+    expect(await json(res)).toEqual({ msg: "Unauthorized" });
+  });
+
+  test("403s when authenticated as regular user", async () => {
+    const user = await createUser();
+    const res = await get(`${API}/admin/users/email/test@example.org`, {
+      headers: user.authHeaders,
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("404s when user email does not exist", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await get(`${API}/admin/users/email/nonexistent@example.org`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("returns user details for valid email", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    await createUser({
+      firstname: "Carol",
+      lastname: "Danvers",
+      email: "carol@example.org",
+    });
+
+    const res = await get(`${API}/admin/users/email/carol@example.org`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(200);
+
+    const body = await json(res);
+    expect(body.email).toBe("carol@example.org");
+    expect(body.firstname).toBe("Carol");
+    expect(body.lastname).toBe("Danvers");
+    expect(body.fullName).toBe("Carol Danvers");
+    expect(body.isActive).toBe(true);
+    expect(body.isAdmin).toBe(false);
+  });
+});

@@ -85,3 +85,34 @@ adminRoutes.get("/users", async (c) => {
 
   return c.json(response);
 });
+
+/**
+ * GET /api/restful/admin/users/email/:email
+ *
+ * Retrieve user details by email address.
+ */
+adminRoutes.get("/users/email/:email", async (c) => {
+  const email = c.req.param("email");
+  const account = await accounts.findByEmail(email);
+  if (account === null) {
+    return c.text(`User '${email}' could not be found`, 404);
+  }
+  return c.json(toRestUser(account, isAdmin(account)));
+});
+
+/**
+ * GET /api/restful/admin/users/:id
+ *
+ * Retrieve user details by numeric ID.
+ */
+adminRoutes.get("/users/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("User could not be found", 404);
+  }
+  const account = await accounts.findById(id);
+  if (account === null) {
+    return c.text("User could not be found", 404);
+  }
+  return c.json(toRestUser(account, isAdmin(account)));
+});
