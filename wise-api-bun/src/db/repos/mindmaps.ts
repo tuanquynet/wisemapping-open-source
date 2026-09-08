@@ -91,6 +91,14 @@ export async function findByCreatorAndSource(
   return row === null ? null : toMindmap(row);
 }
 
+export async function findByCreator(creatorId: number): Promise<Mindmap[]> {
+  const rows = await dbAdapter.all<MindmapRow>(
+    `SELECT * FROM mindmap WHERE creator_id = ?1`,
+    [creatorId],
+  );
+  return rows.map(toMindmap);
+}
+
 export interface ListedMindmap extends MindmapWithPeople {
   myRole: Role;
   myStarred: boolean;

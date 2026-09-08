@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { API, get, json } from "./helpers/client.ts";
+import { API, del, get, json, post } from "./helpers/client.ts";
 import { createUser } from "./helpers/auth.ts";
 import { resetDb } from "./helpers/db.ts";
 
@@ -181,5 +181,125 @@ describe("GET /api/restful/admin/users/email/:email", () => {
     expect(body.fullName).toBe("Carol Danvers");
     expect(body.isActive).toBe(true);
     expect(body.isAdmin).toBe(false);
+  });
+});
+
+describe("POST /api/restful/admin/users", () => {
+  test("401s when not authenticated", async () => {
+    const res = await post(`${API}/admin/users`, {
+      json: {
+        email: "newuser@example.org",
+        firstname: "New",
+        lastname: "User",
+        password: "password123",
+      },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("403s when authenticated as non-admin", async () => {
+    const user = await createUser();
+    const res = await post(`${API}/admin/users`, {
+      headers: user.authHeaders,
+      json: {
+        email: "newuser@example.org",
+        firstname: "New",
+        lastname: "User",
+        password: "password123",
+      },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("creates an immediately active user and returns 201 with headers", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await post(`${API}/admin/users`, {
+      headers: admin.authHeaders,
+      json: {
+        email: "createdbyadmin@example.org",
+        firstname: "AdminCreated",
+        lastname: "Person",
+        password: "securePassword123",
+      },
+    });
+    expect(res.status).toBe(201);
+
+    const resourceId = res.headers.get("ResourceId");
+    expect(resourceId).toBeDefined();
+    expect(res.headers.get("Location")).toBe(`/api/restful/admin/users/${resourceId}`);
+
+    // Fetch user and verify they are immediately active
+    const getRes = await get(`${API}/admin/users/${resourceId}`, {
+      headers: admin.authHeaders,
+    });
+    expect(getRes.status).toBe(200);
+    const body = await json(getRes);
+    expect(body.email).toBe("createdbyadmin@example.org");
+    expect(body.firstname).toBe("AdminCreated");
+    expect(body.lastname).toBe("Person");
+    expect(body.isActive).toBe(true);
+  });
+
+  test("rejects duplicate email with 400", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    await createUser({ email: "existing@example.org" });
+
+    const res = await post(`${API}/admin/users`, {
+      headers: admin.authHeaders,
+      json: {
+        email: "existing@example.org",
+        firstname: "Duplicate",
+        lastname: "Person",
+        password: "password123",
+      },
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("DELETE /api/restful/admin/users/:id", () => {
+  test("401s when not authenticated", async () => {
+    const res = await del(`${API}/admin/users/1`);
+    expect(res.status).toBe(401);
+  });
+
+  test("403s when authenticated as non-admin", async () => {
+    const user = await createUser();
+    const res = await del(`${API}/admin/users/1`, {
+      headers: user.authHeaders,
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("404s when user does not exist", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await del(`${API}/admin/users/999999`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("deletes user and cascades associated maps", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const user = await createUser({ email: "tobedeleted@example.org" });
+
+    const listRes = await get(`${API}/admin/users?search=tobedeleted@example.org`, {
+      headers: admin.authHeaders,
+    });
+    const listBody = await json(listRes);
+    const users = listBody.data as Array<Record<string, unknown>>;
+    const userId = Number(users[0]?.id);
+    expect(userId).toBeGreaterThan(0);
+
+    const delRes = await del(`${API}/admin/users/${userId}`, {
+      headers: admin.authHeaders,
+    });
+    expect(delRes.status).toBe(204);
+
+    // User should no longer exist
+    const verifyRes = await get(`${API}/admin/users/${userId}`, {
+      headers: admin.authHeaders,
+    });
+    expect(verifyRes.status).toBe(404);
   });
 });

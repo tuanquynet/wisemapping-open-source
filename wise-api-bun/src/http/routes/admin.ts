@@ -1,10 +1,17 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import * as accounts from "../../db/repos/accounts.ts";
+import * as mindmaps from "../../db/repos/mindmaps.ts";
 import { isAdmin } from "../../services/authService.ts";
 import { requireAdmin } from "../middleware/requireAdmin.ts";
 import { toRestUser, type RestUser } from "../dto/restUser.ts";
+import { bunPasswordHasher, type PasswordHasher } from "../../util/passwordHash.ts";
+import { BadRequestError } from "../../domain/errors.ts";
 import type { Env } from "../env.ts";
+
+function resolvePasswordHasher(c: Context<Env>): PasswordHasher {
+  return c.get("passwordHasher") ?? bunPasswordHasher;
+}
 
 export const adminRoutes = new Hono<Env>();
 
@@ -115,4 +122,76 @@ adminRoutes.get("/users/:id", async (c) => {
     return c.text("User could not be found", 404);
   }
   return c.json(toRestUser(account, isAdmin(account)));
+});
+
+/**
+ * POST /api/restful/admin/users
+ *
+ * Directly create a new active user.
+ */
+adminRoutes.post("/users", async (c) => {
+  let body: Record<string, unknown>;
+  try {
+    body = ((await c.req.json()) ?? {}) as Record<string, unknown>;
+  } catch {
+    throw new BadRequestError("A JSON body is required.");
+  }
+
+  const email = String(body.email ?? "").trim().toLowerCase();
+  const firstname = String(body.firstname ?? "").trim();
+  const lastname = String(body.lastname ?? "").trim();
+  const password = String(body.password ?? "");
+
+  if (!email || !firstname || !lastname || !password) {
+    throw new BadRequestError("Email, firstname, lastname, and password are required.");
+  }
+
+  const existing = await accounts.findRowByEmail(email);
+  if (existing !== null && existing.password_hash !== null) {
+    throw new BadRequestError("User already exists with this email.");
+  }
+
+  const hasher = resolvePasswordHasher(c);
+  const passwordHash = await hasher.hash(password);
+
+  const account = await accounts.createOrUpgrade({
+    email,
+    firstname,
+    lastname,
+    passwordHash,
+    locale: null,
+    activationCode: null,
+    activatedAt: Date.now(), // admin created users are immediately activated
+  });
+
+  c.header("Location", `/api/restful/admin/users/${account.id}`);
+  c.header("ResourceId", String(account.id));
+  return c.body(null, 201);
+});
+
+/**
+ * DELETE /api/restful/admin/users/:id
+ *
+ * Delete a user by ID, cascading mindmaps created by them and deleting the account.
+ */
+adminRoutes.delete("/users/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("User could not be found", 404);
+  }
+
+  const account = await accounts.findById(id);
+  if (account === null) {
+    return c.text("User could not be found", 404);
+  }
+
+  // Delete mindmaps created by user first (cascades XML, history, collabs, labels, comments)
+  const userMindmaps = await mindmaps.findByCreator(id);
+  for (const m of userMindmaps) {
+    await mindmaps.deleteById(m.id);
+  }
+
+  // Delete account
+  await accounts.deleteById(id);
+  return c.body(null, 204);
 });
