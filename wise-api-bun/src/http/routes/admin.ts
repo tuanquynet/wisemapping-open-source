@@ -195,3 +195,100 @@ adminRoutes.delete("/users/:id", async (c) => {
   await accounts.deleteById(id);
   return c.body(null, 204);
 });
+
+/**
+ * PUT /api/restful/admin/users/:id
+ *
+ * Update user profile fields (firstname, lastname, email, locale).
+ */
+adminRoutes.put("/users/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("User could not be found", 404);
+  }
+
+  const account = await accounts.findById(id);
+  if (account === null) {
+    return c.text("User could not be found", 404);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = ((await c.req.json()) ?? {}) as Record<string, unknown>;
+  } catch {
+    throw new BadRequestError("A JSON body is required.");
+  }
+
+  if (typeof body.firstname === "string" && body.firstname.trim() !== "") {
+    await accounts.updateProfileField(id, "firstname", body.firstname.trim());
+  }
+  if (typeof body.lastname === "string" && body.lastname.trim() !== "") {
+    await accounts.updateProfileField(id, "lastname", body.lastname.trim());
+  }
+  if (typeof body.locale === "string" && body.locale.trim() !== "") {
+    await accounts.updateProfileField(id, "locale", body.locale.trim());
+  }
+  if (typeof body.email === "string" && body.email.trim() !== "") {
+    const newEmail = body.email.trim().toLowerCase();
+    if (newEmail !== account.email.toLowerCase()) {
+      const existing = await accounts.findByEmail(newEmail);
+      if (existing !== null && existing.id !== id) {
+        throw new BadRequestError("Email already exists");
+      }
+      await accounts.updateEmail(id, newEmail);
+    }
+  }
+
+  const updated = await accounts.findById(id);
+  return c.json(toRestUser(updated ?? account, isAdmin(updated ?? account)));
+});
+
+/**
+ * PUT /api/restful/admin/users/:id/password
+ *
+ * Reset/change user's password. Accepts text/plain raw body.
+ */
+adminRoutes.put("/users/:id/password", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("User could not be found", 404);
+  }
+
+  const account = await accounts.findById(id);
+  if (account === null) {
+    return c.text("User could not be found", 404);
+  }
+
+  const password = (await c.req.text()).trim();
+  if (password.length < 8) {
+    throw new BadRequestError("Password must be at least 8 characters.");
+  }
+  if (password.length > 40) {
+    throw new BadRequestError("Password must be at most 40 characters.");
+  }
+
+  const hasher = resolvePasswordHasher(c);
+  const hash = await hasher.hash(password);
+  await accounts.updatePasswordHash(id, hash);
+  return c.body(null, 204);
+});
+
+/**
+ * PUT /api/restful/admin/users/:id/activate
+ *
+ * Manually activate user account.
+ */
+adminRoutes.put("/users/:id/activate", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("User could not be found", 404);
+  }
+
+  const account = await accounts.findById(id);
+  if (account === null) {
+    return c.text("User could not be found", 404);
+  }
+
+  await accounts.activate(id);
+  return c.body(null, 204);
+});

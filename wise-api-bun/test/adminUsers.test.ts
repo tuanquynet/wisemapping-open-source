@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { API, del, get, json, post } from "./helpers/client.ts";
+import { API, del, get, json, post, put } from "./helpers/client.ts";
 import { createUser } from "./helpers/auth.ts";
 import { resetDb } from "./helpers/db.ts";
+import * as accounts from "../src/db/repos/accounts.ts";
 
 beforeEach(() => resetDb());
 describe("GET /api/restful/admin/users", () => {
@@ -301,5 +302,177 @@ describe("DELETE /api/restful/admin/users/:id", () => {
       headers: admin.authHeaders,
     });
     expect(verifyRes.status).toBe(404);
+  });
+});
+
+describe("PUT /api/restful/admin/users/:id", () => {
+  test("401s when not authenticated", async () => {
+    const res = await put(`${API}/admin/users/1`, {
+      json: { firstname: "NewName" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("403s when authenticated as non-admin", async () => {
+    const user = await createUser();
+    const res = await put(`${API}/admin/users/1`, {
+      headers: user.authHeaders,
+      json: { firstname: "NewName" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("404s when user does not exist", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await put(`${API}/admin/users/999999`, {
+      headers: admin.authHeaders,
+      json: { firstname: "NewName" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("updates user profile fields and returns updated RestUser", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const user = await createUser({
+      firstname: "OldFirst",
+      lastname: "OldLast",
+      email: "modtest@example.org",
+    });
+
+    const listRes = await get(`${API}/admin/users?search=modtest@example.org`, {
+      headers: admin.authHeaders,
+    });
+    const users = (await json(listRes)).data as Array<Record<string, unknown>>;
+    const userId = Number(users[0]?.id);
+
+    const res = await put(`${API}/admin/users/${userId}`, {
+      headers: admin.authHeaders,
+      json: {
+        firstname: "UpdatedFirst",
+        lastname: "UpdatedLast",
+        email: "updatedemail@example.org",
+        locale: "es",
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const body = await json(res);
+    expect(body.firstname).toBe("UpdatedFirst");
+    expect(body.lastname).toBe("UpdatedLast");
+    expect(body.email).toBe("updatedemail@example.org");
+    expect(body.fullName).toBe("UpdatedFirst UpdatedLast");
+    expect(body.locale).toBe("es");
+  });
+
+  test("rejects email change if already taken by another user with 400", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    await createUser({ email: "user1@example.org" });
+    const user2 = await createUser({ email: "user2@example.org" });
+
+    const listRes = await get(`${API}/admin/users?search=user2@example.org`, {
+      headers: admin.authHeaders,
+    });
+    const users = (await json(listRes)).data as Array<Record<string, unknown>>;
+    const user2Id = Number(users[0]?.id);
+
+    const res = await put(`${API}/admin/users/${user2Id}`, {
+      headers: admin.authHeaders,
+      json: {
+        email: "user1@example.org",
+      },
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("PUT /api/restful/admin/users/:id/password", () => {
+  test("401s when not authenticated", async () => {
+    const res = await put(`${API}/admin/users/1/password`, {
+      text: "newpassword123",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("403s when authenticated as non-admin", async () => {
+    const user = await createUser();
+    const res = await put(`${API}/admin/users/1/password`, {
+      headers: user.authHeaders,
+      text: "newpassword123",
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("updates password successfully with text/plain body returning 204", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    await createUser({ email: "pwtest@example.org", password: "oldpassword123" });
+
+    const listRes = await get(`${API}/admin/users?search=pwtest@example.org`, {
+      headers: admin.authHeaders,
+    });
+    const users = (await json(listRes)).data as Array<Record<string, unknown>>;
+    const userId = Number(users[0]?.id);
+
+    const res = await put(`${API}/admin/users/${userId}/password`, {
+      headers: admin.authHeaders,
+      text: "newSecurePassword456",
+    });
+    expect(res.status).toBe(204);
+
+    // User should be able to log in with new password
+    const loginRes = await post(`${API}/authenticate`, {
+      json: { email: "pwtest@example.org", password: "newSecurePassword456" },
+    });
+    expect(loginRes.status).toBe(200);
+  });
+
+  test("rejects password shorter than 8 chars with 400", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    const res = await put(`${API}/admin/users/1/password`, {
+      headers: admin.authHeaders,
+      text: "short",
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("PUT /api/restful/admin/users/:id/activate", () => {
+  test("401s when not authenticated", async () => {
+    const res = await put(`${API}/admin/users/1/activate`);
+    expect(res.status).toBe(401);
+  });
+
+  test("403s when authenticated as non-admin", async () => {
+    const user = await createUser();
+    const res = await put(`${API}/admin/users/1/activate`, {
+      headers: user.authHeaders,
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("activates an inactive user returning 204", async () => {
+    const admin = await createUser({ email: "admin@wisemapping.org" });
+    // Insert inactive user directly in database
+    const account = await accounts.createOrUpgrade({
+      email: "inactive@example.org",
+      firstname: "Inactive",
+      lastname: "User",
+      passwordHash: "hash",
+      locale: null,
+      activationCode: "dummyCode12345678901",
+      activatedAt: null,
+    });
+    expect(account.activatedAt).toBeNull();
+
+    const res = await put(`${API}/admin/users/${account.id}/activate`, {
+      headers: admin.authHeaders,
+    });
+    expect(res.status).toBe(204);
+
+    // Check that user is active now
+    const getRes = await get(`${API}/admin/users/${account.id}`, {
+      headers: admin.authHeaders,
+    });
+    const body = await json(getRes);
+    expect(body.isActive).toBe(true);
   });
 });

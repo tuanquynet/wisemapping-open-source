@@ -160,6 +160,13 @@ export async function updateProfileField(
   ]);
 }
 
+export async function updateEmail(id: number, email: string): Promise<void> {
+  await dbAdapter.run(
+    `UPDATE account SET email = ?1, email_lower = ?2 WHERE id = ?3`,
+    [email, email.trim().toLowerCase(), id],
+  );
+}
+
 export async function updatePasswordHash(
   id: number,
   passwordHash: string,
