@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 
 import * as accounts from "../../db/repos/accounts.ts";
 import * as mindmaps from "../../db/repos/mindmaps.ts";
+import * as mindmapXml from "../../db/repos/mindmapXml.ts";
 import { isAdmin } from "../../services/authService.ts";
 import { requireAdmin } from "../middleware/requireAdmin.ts";
 import { toRestUser, type RestUser } from "../dto/restUser.ts";
@@ -357,4 +358,60 @@ adminRoutes.get("/maps", async (c) => {
   };
 
   return c.json(response);
+});
+
+/**
+ * GET /api/restful/admin/users/:id/maps
+ *
+ * Retrieve all mindmaps created by user.
+ */
+adminRoutes.get("/users/:id/maps", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("User could not be found", 404);
+  }
+
+  const account = await accounts.findById(id);
+  if (account === null) {
+    return c.text("User could not be found", 404);
+  }
+
+  const userMaps = await mindmaps.findByCreator(id);
+  const result: AdminRestMap[] = userMaps.map((m) =>
+    toAdminRestMap({
+      ...m,
+      creatorEmail: account.email,
+      creatorFirstname: account.firstname,
+      creatorLastname: account.lastname,
+      lastEditorEmail: account.email,
+      lastEditorFirstname: account.firstname,
+      lastEditorLastname: account.lastname,
+    }),
+  );
+  return c.json(result);
+});
+
+/**
+ * GET /api/restful/admin/maps/:id/xml
+ *
+ * Retrieve the raw XML document for any mindmap.
+ */
+adminRoutes.get("/maps/:id/xml", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.text("Map could not be found", 404);
+  }
+
+  const map = await mindmaps.findById(id);
+  if (map === null) {
+    return c.text("Map could not be found", 404);
+  }
+
+  const xml = await mindmapXml.get(id);
+  if (xml === null) {
+    return c.text("Map could not be found", 404);
+  }
+
+  c.header("Content-Type", "application/xml; charset=UTF-8");
+  return c.body(xml, 200);
 });
