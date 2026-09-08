@@ -474,3 +474,58 @@ adminRoutes.delete("/maps/:id", async (c) => {
   await mindmaps.deleteById(id);
   return c.body(null, 204);
 });
+
+/**
+ * GET /api/restful/admin/system/health
+ *
+ * Basic health status report for database and memory.
+ */
+adminRoutes.get("/system/health", async (c) => {
+  let databaseStatus = "UP";
+  try {
+    await accounts.countWithFilters({});
+  } catch {
+    databaseStatus = "DOWN";
+  }
+
+  let memoryUsagePercent = 0;
+  if (typeof process !== "undefined" && process.memoryUsage) {
+    const mem = process.memoryUsage();
+    memoryUsagePercent =
+      mem.heapTotal > 0
+        ? Math.round((mem.heapUsed / mem.heapTotal) * 10000) / 100
+        : 0;
+  }
+
+  return c.json({
+    database: databaseStatus,
+    memory: "UP",
+    memoryUsagePercent,
+  });
+});
+
+/**
+ * GET /api/restful/admin/system/info
+ *
+ * Diagnostic info including application info, counts, and runtime stats.
+ */
+adminRoutes.get("/system/info", async (c) => {
+  const [totalUsers, totalMindmaps] = await Promise.all([
+    accounts.countWithFilters({}),
+    mindmaps.countWithFilters({}),
+  ]);
+
+  return c.json({
+    application: {
+      name: "WiseMapping API",
+      version: "bun",
+    },
+    database: {
+      driver: "bun:sqlite",
+    },
+    statistics: {
+      totalUsers,
+      totalMindmaps,
+    },
+  });
+});
