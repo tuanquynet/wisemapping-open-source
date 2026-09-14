@@ -15,15 +15,21 @@ describe("GET /app/config", () => {
     expect(res.headers.get("Content-Type")).toContain("application/json");
 
     const body = await res.json();
-    expect(body).toEqual({
+    const isGoogleEnabled =
+      config.googleOauthEnabled && config.googleClientId !== "";
+    const expected: Record<string, unknown> = {
       apiBaseUrl: config.apiBaseUrl,
       uiBaseUrl: config.uiBaseUrl,
-      googleOauth2Enabled: false,
+      googleOauth2Enabled: isGoogleEnabled,
       facebookOauth2Enabled: false,
-      registrationEnabled: true,
-      recaptcha2Enabled: false,
-      jwtExpirationMin: 10080,
-    });
+      registrationEnabled: config.registrationEnabled,
+      recaptcha2Enabled: config.captchaEnabled,
+      jwtExpirationMin: config.jwtExpirationMin,
+    };
+    if (isGoogleEnabled) {
+      expected.googleOauth2Url = `${config.apiBaseUrl}/api/restful/oauth2/google/authorize`;
+    }
+    expect(body).toEqual(expected);
   });
 
   test("omits optional string keys rather than sending null", async () => {
@@ -34,7 +40,13 @@ describe("GET /app/config", () => {
     >;
     expect("recaptcha2SiteKey" in body).toBe(false);
     expect("analyticsAccount" in body).toBe(false);
-    expect("googleOauth2Url" in body).toBe(false);
+    if (!config.googleOauthEnabled || config.googleClientId === "") {
+      expect("googleOauth2Url" in body).toBe(false);
+    } else {
+      expect(body.googleOauth2Url).toBe(
+        `${config.apiBaseUrl}/api/restful/oauth2/google/authorize`,
+      );
+    }
     expect("facebookOauth2Url" in body).toBe(false);
   });
 

@@ -33,17 +33,22 @@ export interface RestAppConfig {
  * `buildConfig(c.env)` result).
  */
 export function buildAppConfig(config: Config): RestAppConfig {
+  const googleEnabled =
+    config.googleOauthEnabled && config.googleClientId !== "";
+
   const result: RestAppConfig = {
     apiBaseUrl: config.apiBaseUrl,
     uiBaseUrl: config.uiBaseUrl,
-    // OAuth2 is out of scope. The Java builder omits the URLs when the
-    // corresponding client registration is absent, so they stay absent here.
-    googleOauth2Enabled: false,
+    googleOauth2Enabled: googleEnabled,
     facebookOauth2Enabled: false,
     registrationEnabled: config.registrationEnabled,
     recaptcha2Enabled: config.captchaEnabled,
     jwtExpirationMin: config.jwtExpirationMin,
   };
+
+  if (googleEnabled) {
+    result.googleOauth2Url = `${config.apiBaseUrl}/api/restful/oauth2/google/authorize`;
+  }
 
   // @JsonInclude(NON_NULL): omit rather than emit null/empty.
   if (config.captchaSiteKey !== "")

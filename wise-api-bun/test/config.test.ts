@@ -55,6 +55,9 @@ describe("buildConfig", () => {
     expect(config.emailConfirmationEnabled).toBe(false);
     expect(config.mapListMaxSize).toBe(500);
     expect(config.noteMaxLength).toBe(10000);
+    expect(config.googleOauthEnabled).toBe(false);
+    expect(config.googleClientId).toBe("");
+    expect(config.googleClientSecret).toBe("");
   });
 
   test("overrides defaults from the provided env", () => {
@@ -89,5 +92,61 @@ describe("buildConfig", () => {
     const config = buildConfig(baseEnv());
     expect(config.jwtKey).toBeInstanceOf(Uint8Array);
     expect(config.jwtKey.length).toBe(32);
+  });
+
+  test("configures Google OAuth when client id and secret are provided", () => {
+    const config = buildConfig(
+      baseEnv({
+        GOOGLE_CLIENT_ID: "client-id-123",
+        GOOGLE_CLIENT_SECRET: "client-secret-xyz",
+      }),
+    );
+
+    expect(config.googleClientId).toBe("client-id-123");
+    expect(config.googleClientSecret).toBe("client-secret-xyz");
+    expect(config.googleOauthEnabled).toBe(true);
+  });
+
+  test("falls back to GOOGLE_SSO_CLIENT_ID and GOOGLE_SSO_CLIENT_SECRET", () => {
+    const config = buildConfig(
+      baseEnv({
+        GOOGLE_SSO_CLIENT_ID: "sso-id-123",
+        GOOGLE_SSO_CLIENT_SECRET: "sso-secret-xyz",
+      }),
+    );
+
+    expect(config.googleClientId).toBe("sso-id-123");
+    expect(config.googleClientSecret).toBe("sso-secret-xyz");
+    expect(config.googleOauthEnabled).toBe(true);
+  });
+
+  test("GOOGLE_CLIENT_ID takes precedence over GOOGLE_SSO_CLIENT_ID", () => {
+    const config = buildConfig(
+      baseEnv({
+        GOOGLE_CLIENT_ID: "primary-id",
+        GOOGLE_SSO_CLIENT_ID: "secondary-id",
+        GOOGLE_CLIENT_SECRET: "secret",
+      }),
+    );
+
+    expect(config.googleClientId).toBe("primary-id");
+  });
+
+  test("explicit GOOGLE_OAUTH_ENABLED overrides default calculated from credentials", () => {
+    const disabled = buildConfig(
+      baseEnv({
+        GOOGLE_CLIENT_ID: "id",
+        GOOGLE_CLIENT_SECRET: "secret",
+        GOOGLE_OAUTH_ENABLED: "false",
+      }),
+    );
+    expect(disabled.googleOauthEnabled).toBe(false);
+
+    const enabledExplicitly = buildConfig(
+      baseEnv({
+        GOOGLE_OAUTH_ENABLED: "true",
+      }),
+    );
+    expect(enabledExplicitly.googleOauthEnabled).toBe(true);
   });
 });

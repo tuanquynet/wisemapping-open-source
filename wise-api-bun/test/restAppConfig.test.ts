@@ -33,7 +33,7 @@ describe("buildAppConfig", () => {
     expect(result.jwtExpirationMin).toBe(42);
   });
 
-  test("OAuth2 URLs are always absent -- out of scope, matching the Java builder when no client is registered", () => {
+  test("Google OAuth2 is disabled and URL is absent when not configured", () => {
     const config = buildConfig({ JWT_SECRET: VALID_JWT_SECRET });
     const result = buildAppConfig(config);
 
@@ -41,6 +41,45 @@ describe("buildAppConfig", () => {
     expect(result.facebookOauth2Enabled).toBe(false);
     expect("googleOauth2Url" in result).toBe(false);
     expect("facebookOauth2Url" in result).toBe(false);
+  });
+
+  test("Google OAuth2 is enabled and includes authorize URL when configured", () => {
+    const config = buildConfig({
+      JWT_SECRET: VALID_JWT_SECRET,
+      API_BASE_URL: "https://api.wisemapping.test",
+      GOOGLE_CLIENT_ID: "google-client-id-123",
+      GOOGLE_CLIENT_SECRET: "google-client-secret-xyz",
+    });
+    const result = buildAppConfig(config);
+
+    expect(result.googleOauth2Enabled).toBe(true);
+    expect(result.googleOauth2Url).toBe(
+      "https://api.wisemapping.test/api/restful/oauth2/google/authorize",
+    );
+  });
+
+  test("Google OAuth2 is disabled if googleOauthEnabled is false despite client id being set", () => {
+    const config = buildConfig({
+      JWT_SECRET: VALID_JWT_SECRET,
+      GOOGLE_CLIENT_ID: "google-client-id-123",
+      GOOGLE_CLIENT_SECRET: "google-client-secret-xyz",
+      GOOGLE_OAUTH_ENABLED: "false",
+    });
+    const result = buildAppConfig(config);
+
+    expect(result.googleOauth2Enabled).toBe(false);
+    expect("googleOauth2Url" in result).toBe(false);
+  });
+
+  test("Google OAuth2 is disabled if googleClientId is empty despite googleOauthEnabled being true", () => {
+    const config = buildConfig({
+      JWT_SECRET: VALID_JWT_SECRET,
+      GOOGLE_OAUTH_ENABLED: "true",
+    });
+    const result = buildAppConfig(config);
+
+    expect(result.googleOauth2Enabled).toBe(false);
+    expect("googleOauth2Url" in result).toBe(false);
   });
 
   test("omits recaptcha2SiteKey and analyticsAccount when unset (@JsonInclude(NON_NULL))", () => {
