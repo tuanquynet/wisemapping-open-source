@@ -12,6 +12,7 @@ export const oauth2Routes = new Hono<Env>();
 export interface OAuthState {
   origin: string;
   redirect: string;
+  callbackUrl?: string | undefined;
   timestamp: number;
 }
 function resolveSafeOrigin(
@@ -62,7 +63,7 @@ export function signOAuthState(
 export function parseState(
   stateParam: string | undefined,
   appConfig: Config,
-): { origin: string; redirect: string } {
+): { origin: string; redirect: string; callbackUrl?: string | undefined } {
   if (!stateParam) {
     return { origin: appConfig.uiBaseUrl, redirect: "/c/maps/" };
   }
@@ -96,7 +97,11 @@ export function parseState(
     ) {
       redirect = decoded.redirect;
     }
-    return { origin, redirect };
+    const callbackUrl =
+      typeof decoded.callbackUrl === "string" && decoded.callbackUrl.startsWith("http")
+        ? decoded.callbackUrl
+        : undefined;
+    return { origin, redirect, callbackUrl };
   } catch {
     return { origin: appConfig.uiBaseUrl, redirect: "/c/maps/" };
   }
@@ -125,14 +130,22 @@ oauth2Routes.get("/google/authorize", (c) => {
   }
   const origin = resolveSafeOrigin(candidateOrigin, activeConfig);
 
+  let callbackUrl = activeConfig.googleOauthRedirectUri;
+  if (!callbackUrl) {
+    if (origin && origin !== "*" && activeConfig.corsAllowedOrigins.includes(origin)) {
+      callbackUrl = `${origin}/api/restful/oauth2/google/callback`;
+    } else {
+      callbackUrl = `${activeConfig.apiBaseUrl}/api/restful/oauth2/google/callback`;
+    }
+  }
+
   const statePayload: OAuthState = {
     origin,
     redirect,
+    callbackUrl,
     timestamp: Date.now(),
   };
   const state = signOAuthState(statePayload, activeConfig.jwtKey);
-
-  const callbackUrl = `${activeConfig.apiBaseUrl}/api/restful/oauth2/google/callback`;
   const googleAuthUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   googleAuthUrl.searchParams.set("client_id", activeConfig.googleClientId);
   googleAuthUrl.searchParams.set("redirect_uri", callbackUrl);
@@ -147,11 +160,17 @@ oauth2Routes.get("/google/authorize", (c) => {
 oauth2Routes.get("/google/callback", async (c) => {
   const activeConfig = c.get("config") ?? config;
   const stateParam = c.req.query("state");
-  const { origin: uiOrigin, redirect: targetPath } = parseState(
-    stateParam,
-    activeConfig,
-  );
-
+  const {
+    origin: uiOrigin,
+    redirect: targetPath,
+    callbackUrl: stateCallbackUrl,
+  } = parseState(stateParam, activeConfig);
+  const callbackUrl =
+    stateCallbackUrl ||
+    activeConfig.googleOauthRedirectUri ||
+    (uiOrigin && uiOrigin !== "*" && activeConfig.corsAllowedOrigins.includes(uiOrigin)
+      ? `${uiOrigin}/api/restful/oauth2/google/callback`
+      : `${activeConfig.apiBaseUrl}/api/restful/oauth2/google/callback`);
   const error = c.req.query("error");
   if (error) {
     logger.warn(`Google OAuth error received: ${error}`);
@@ -167,7 +186,6 @@ oauth2Routes.get("/google/callback", async (c) => {
   }
 
   try {
-    const callbackUrl = `${activeConfig.apiBaseUrl}/api/restful/oauth2/google/callback`;
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

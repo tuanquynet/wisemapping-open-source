@@ -74,7 +74,7 @@ describe("OAuth2 routes", () => {
         "test-client-id.apps.googleusercontent.com",
       );
       expect(url.searchParams.get("redirect_uri")).toBe(
-        "https://api.test.com/api/restful/oauth2/google/callback",
+        "https://simpmind.tuanquynet.click/api/restful/oauth2/google/callback",
       );
       expect(url.searchParams.get("response_type")).toBe("code");
       expect(url.searchParams.get("scope")).toBe("openid email profile");
@@ -330,7 +330,7 @@ describe("OAuth2 routes", () => {
       );
       expect(params.get("client_secret")).toBe("test-client-secret");
       expect(params.get("redirect_uri")).toBe(
-        "https://api.test.com/api/restful/oauth2/google/callback",
+        "https://simpmind.tuanquynet.click/api/restful/oauth2/google/callback",
       );
       expect(params.get("grant_type")).toBe("authorization_code");
 

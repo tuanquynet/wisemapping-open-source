@@ -37,6 +37,7 @@ export interface Config {
   readonly googleOauthEnabled: boolean;
   readonly googleClientId: string;
   readonly googleClientSecret: string;
+  readonly googleOauthRedirectUri: string;
 }
 
 /**
@@ -130,10 +131,10 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     raw("GOOGLE_CLIENT_ID") ?? raw("GOOGLE_SSO_CLIENT_ID") ?? "";
   const googleClientSecret =
     raw("GOOGLE_CLIENT_SECRET") ?? raw("GOOGLE_SSO_CLIENT_SECRET") ?? "";
+  const googleOauthRedirectUri = str("GOOGLE_OAUTH_REDIRECT_URI", "").trim();
   const googleOauthDefault =
     googleClientId !== "" && googleClientSecret !== "";
   const googleOauthEnabled = bool("GOOGLE_OAUTH_ENABLED", googleOauthDefault);
-
   const result: Config = Object.freeze({
     port: int("PORT", 8080),
     dbPath: str("DB_PATH", "./data/wisemapping.db"),
@@ -162,6 +163,7 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     googleOauthEnabled,
     googleClientId,
     googleClientSecret,
+    googleOauthRedirectUri,
   });
 
   if (problems.length > 0) {
@@ -218,4 +220,5 @@ export const config: Config = {
   get googleOauthEnabled() { return getConfig().googleOauthEnabled; },
   get googleClientId() { return getConfig().googleClientId; },
   get googleClientSecret() { return getConfig().googleClientSecret; },
+  get googleOauthRedirectUri() { return getConfig().googleOauthRedirectUri; },
 };
