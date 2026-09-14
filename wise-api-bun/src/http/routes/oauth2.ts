@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 
 import { config, type Config } from "../../config.ts";
@@ -8,12 +9,11 @@ import type { Env } from "../env.ts";
 
 export const oauth2Routes = new Hono<Env>();
 
-interface OAuthState {
+export interface OAuthState {
   origin: string;
   redirect: string;
   timestamp: number;
 }
-
 function resolveSafeOrigin(
   originCandidate: string | undefined,
   appConfig: Config,
@@ -29,7 +29,37 @@ function resolveSafeOrigin(
   return appConfig.uiBaseUrl;
 }
 
-function parseState(
+function verifyHmac(
+  data: string,
+  signatureHex: string,
+  key: Uint8Array,
+): boolean {
+  try {
+    if (!signatureHex || typeof signatureHex !== "string") {
+      return false;
+    }
+    const expectedHex = createHmac("sha256", key).update(data).digest("hex");
+    const expectedBuf = Buffer.from(expectedHex, "hex");
+    const actualBuf = Buffer.from(signatureHex, "hex");
+    if (expectedBuf.length !== actualBuf.length) {
+      return false;
+    }
+    return timingSafeEqual(expectedBuf, actualBuf);
+  } catch {
+    return false;
+  }
+}
+
+export function signOAuthState(
+  payload: OAuthState,
+  jwtKey: Uint8Array,
+): string {
+  const base64Payload = btoa(JSON.stringify(payload));
+  const hmac = createHmac("sha256", jwtKey).update(base64Payload).digest("hex");
+  return `${base64Payload}.${hmac}`;
+}
+
+export function parseState(
   stateParam: string | undefined,
   appConfig: Config,
 ): { origin: string; redirect: string } {
@@ -37,7 +67,24 @@ function parseState(
     return { origin: appConfig.uiBaseUrl, redirect: "/c/maps/" };
   }
   try {
-    const decoded = JSON.parse(atob(stateParam)) as Partial<OAuthState>;
+    const dotIndex = stateParam.lastIndexOf(".");
+    if (dotIndex === -1) {
+      logger.warn("OAuth state parameter is missing HMAC signature");
+      return { origin: appConfig.uiBaseUrl, redirect: "/c/maps/" };
+    }
+    const base64Payload = stateParam.slice(0, dotIndex);
+    const signatureHex = stateParam.slice(dotIndex + 1);
+    if (!base64Payload || !signatureHex) {
+      logger.warn("OAuth state parameter has empty payload or signature");
+      return { origin: appConfig.uiBaseUrl, redirect: "/c/maps/" };
+    }
+
+    if (!verifyHmac(base64Payload, signatureHex, appConfig.jwtKey)) {
+      logger.warn("OAuth state parameter has invalid HMAC signature");
+      return { origin: appConfig.uiBaseUrl, redirect: "/c/maps/" };
+    }
+
+    const decoded = JSON.parse(atob(base64Payload)) as Partial<OAuthState>;
     let origin = appConfig.uiBaseUrl;
     if (typeof decoded.origin === "string") {
       origin = resolveSafeOrigin(decoded.origin, appConfig);
@@ -83,7 +130,7 @@ oauth2Routes.get("/google/authorize", (c) => {
     redirect,
     timestamp: Date.now(),
   };
-  const state = btoa(JSON.stringify(statePayload));
+  const state = signOAuthState(statePayload, activeConfig.jwtKey);
 
   const callbackUrl = `${activeConfig.apiBaseUrl}/api/restful/oauth2/google/callback`;
   const googleAuthUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -170,8 +217,14 @@ oauth2Routes.get("/google/callback", async (c) => {
       name?: string;
     };
 
-    if (!profile.email) {
-      logger.error("Google user profile is missing email address");
+    if (!profile.email || profile.email_verified === false) {
+      if (!profile.email) {
+        logger.error("Google user profile is missing email address");
+      } else {
+        logger.warn(
+          `Google user email is unverified: email=${profile.email}, email_verified=${profile.email_verified}`,
+        );
+      }
       return c.redirect(`${uiOrigin}/c/login?error=oauth_failed`, 302);
     }
 

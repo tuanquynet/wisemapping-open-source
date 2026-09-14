@@ -243,6 +243,27 @@ describe("upsertGoogleAccount", () => {
     expect(collab.role).toBe("editor");
   });
 
+  test("upgrades placeholder while preserving existing non-empty names", async () => {
+    const now = Date.now();
+    const row = db
+      .query<{ id: number }, [string, string, string, string, number]>(
+        `INSERT INTO account (email, email_lower, firstname, lastname, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
+      )
+      .get("namedplaceholder@example.org", "namedplaceholder@example.org", "ExistingFirst", "ExistingLast", now)!;
+
+    const upgraded = await accounts.upsertGoogleAccount({
+      email: "namedplaceholder@example.org",
+      firstname: "GoogleFirst",
+      lastname: "GoogleLast",
+    });
+
+    expect(upgraded.id).toBe(row.id);
+    expect(upgraded.firstname).toBe("ExistingFirst");
+    expect(upgraded.lastname).toBe("ExistingLast");
+    expect(await accounts.passwordHashOf(upgraded.id)).toBe("OAUTH:GOOGLE");
+  });
+
   test("auto-links existing inactive password account preserving password_hash and activating", async () => {
     const inactive = await accounts.createOrUpgrade({
       email: "passworduser@example.com",

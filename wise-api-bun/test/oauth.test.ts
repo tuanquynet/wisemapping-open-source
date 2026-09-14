@@ -2,6 +2,7 @@ import { describe, expect, test, beforeEach, afterEach, afterAll } from "bun:tes
 import { app } from "../src/app.ts";
 import { setConfig, buildConfig, getConfig } from "../src/config.ts";
 import * as accounts from "../src/db/repos/accounts.ts";
+import { signOAuthState, type OAuthState } from "../src/http/routes/oauth2.ts";
 import { verifyToken } from "../src/util/jwt.ts";
 import { resetDb } from "./helpers/db.ts";
 
@@ -27,6 +28,21 @@ describe("OAuth2 routes", () => {
       CORS_ALLOWED_ORIGINS: "https://simpmind.tuanquynet.click,https://wisemapping-app.pages.dev",
       ...overrides,
     });
+  }
+
+  function parseAuthorizeState(location: string): {
+    payload: OAuthState;
+    signature: string;
+    rawState: string;
+  } {
+    const url = new URL(location);
+    const rawState = url.searchParams.get("state")!;
+    const [base64Payload, signature] = rawState.split(".");
+    return {
+      payload: JSON.parse(atob(base64Payload!)),
+      signature: signature ?? "",
+      rawState,
+    };
   }
 
   beforeEach(async () => {
@@ -64,9 +80,10 @@ describe("OAuth2 routes", () => {
       expect(url.searchParams.get("scope")).toBe("openid email profile");
       expect(url.searchParams.get("prompt")).toBe("select_account");
 
-      const stateStr = url.searchParams.get("state");
-      expect(stateStr).not.toBeNull();
-      const stateObj = JSON.parse(atob(stateStr!));
+      const { payload: stateObj, signature, rawState } = parseAuthorizeState(location);
+      expect(rawState).not.toBeNull();
+      expect(signature).toBeDefined();
+      expect(signature.length).toBe(64);
       expect(stateObj.origin).toBe("https://simpmind.tuanquynet.click");
       expect(stateObj.redirect).toBe("/c/maps/");
       expect(typeof stateObj.timestamp).toBe("number");
@@ -83,8 +100,7 @@ describe("OAuth2 routes", () => {
       );
 
       expect(res.status).toBe(302);
-      const url = new URL(res.headers.get("Location")!);
-      const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
       expect(stateObj.origin).toBe("https://wisemapping-app.pages.dev");
     });
 
@@ -99,8 +115,7 @@ describe("OAuth2 routes", () => {
       );
 
       expect(res.status).toBe(302);
-      const url = new URL(res.headers.get("Location")!);
-      const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
       expect(stateObj.origin).toBe("https://wisemapping-app.pages.dev");
     });
 
@@ -115,8 +130,7 @@ describe("OAuth2 routes", () => {
       );
 
       expect(res.status).toBe(302);
-      const url = new URL(res.headers.get("Location")!);
-      const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
       expect(stateObj.origin).toBe("https://simpmind.tuanquynet.click");
     });
     test("falls back to uiBaseUrl when corsAllowedOrigins contains '*' and origin is untrusted", async () => {
@@ -136,8 +150,7 @@ describe("OAuth2 routes", () => {
       );
 
       expect(res.status).toBe(302);
-      const url = new URL(res.headers.get("Location")!);
-      const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
       expect(stateObj.origin).toBe("https://simpmind.tuanquynet.click");
     });
 
@@ -148,8 +161,7 @@ describe("OAuth2 routes", () => {
       );
 
       expect(res.status).toBe(302);
-      const url = new URL(res.headers.get("Location")!);
-      const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
       expect(stateObj.redirect).toBe("/c/maps/");
     });
 
@@ -159,8 +171,7 @@ describe("OAuth2 routes", () => {
       );
 
       expect(res.status).toBe(302);
-      const url = new URL(res.headers.get("Location")!);
-      const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
       expect(stateObj.redirect).toBe("/c/maps/123");
     });
 
@@ -193,8 +204,9 @@ describe("OAuth2 routes", () => {
       const stateObj = {
         origin: "https://simpmind.tuanquynet.click",
         redirect: "/c/maps/",
+        timestamp: Date.now(),
       };
-      const state = btoa(JSON.stringify(stateObj));
+      const state = signOAuthState(stateObj, getConfig().jwtKey);
 
       const res = await app.request(
         `/api/restful/oauth2/google/callback?error=access_denied&state=${state}`,
@@ -217,8 +229,9 @@ describe("OAuth2 routes", () => {
       const stateObj = {
         origin: "https://evil.attacker.com",
         redirect: "/c/maps/",
+        timestamp: Date.now(),
       };
-      const state = btoa(JSON.stringify(stateObj));
+      const state = signOAuthState(stateObj, getConfig().jwtKey);
 
       const res = await app.request(
         `/api/restful/oauth2/google/callback?error=access_denied&state=${state}`,
@@ -294,8 +307,9 @@ describe("OAuth2 routes", () => {
       const stateObj = {
         origin: "https://simpmind.tuanquynet.click",
         redirect: "/c/maps/42",
+        timestamp: Date.now(),
       };
-      const encodedState = btoa(JSON.stringify(stateObj));
+      const encodedState = signOAuthState(stateObj, getConfig().jwtKey);
 
       const res = await app.request(
         `/api/restful/oauth2/google/callback?code=mock-auth-code&state=${encodedState}`,
@@ -512,6 +526,125 @@ describe("OAuth2 routes", () => {
       const callbackUrl = new URL(res.headers.get("Location")!);
       expect(callbackUrl.origin).toBe("https://simpmind.tuanquynet.click");
       expect(callbackUrl.searchParams.get("state")).toBe("/c/maps/");
+    });
+
+    test("rejects when email_verified is false with redirect to login?error=oauth_failed", async () => {
+      mockFetch(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://oauth2.googleapis.com/token") {
+          return new Response(
+            JSON.stringify({ access_token: "mock-token" }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url === "https://www.googleapis.com/oauth2/v3/userinfo") {
+          return new Response(
+            JSON.stringify({
+              email: "unverified@example.com",
+              email_verified: false,
+              given_name: "Unverified",
+              family_name: "User",
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const state = signOAuthState(
+        {
+          origin: "https://simpmind.tuanquynet.click",
+          redirect: "/c/maps/",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+
+      const res = await app.request(
+        `/api/restful/oauth2/google/callback?code=mock-code&state=${state}`,
+      );
+
+      expect(res.status).toBe(302);
+      expect(res.headers.get("Location")).toBe(
+        "https://simpmind.tuanquynet.click/c/login?error=oauth_failed",
+      );
+
+      const account = await accounts.findByEmail("unverified@example.com");
+      expect(account).toBeNull();
+    });
+
+    test("falls back to uiBaseUrl and /c/maps/ when state HMAC signature is tampered or forged", async () => {
+      mockFetch(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://oauth2.googleapis.com/token") {
+          return new Response(
+            JSON.stringify({ access_token: "mock-token" }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url === "https://www.googleapis.com/oauth2/v3/userinfo") {
+          return new Response(
+            JSON.stringify({
+              email: "statetest@example.com",
+              email_verified: true,
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      // 1. Missing signature completely
+      const rawPayload = btoa(
+        JSON.stringify({
+          origin: "https://wisemapping-app.pages.dev",
+          redirect: "/c/maps/secret",
+          timestamp: Date.now(),
+        }),
+      );
+      const resNoSig = await app.request(
+        `/api/restful/oauth2/google/callback?code=mock-code&state=${rawPayload}`,
+      );
+      expect(resNoSig.status).toBe(302);
+      const urlNoSig = new URL(resNoSig.headers.get("Location")!);
+      expect(urlNoSig.origin).toBe("https://simpmind.tuanquynet.click");
+      expect(urlNoSig.searchParams.get("state")).toBe("/c/maps/");
+
+      // 2. Tampered signature
+      const validState = signOAuthState(
+        {
+          origin: "https://wisemapping-app.pages.dev",
+          redirect: "/c/maps/secret",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+      const tamperedState = validState.slice(0, -4) + "beef";
+      const resTampered = await app.request(
+        `/api/restful/oauth2/google/callback?code=mock-code&state=${tamperedState}`,
+      );
+      expect(resTampered.status).toBe(302);
+      const urlTampered = new URL(resTampered.headers.get("Location")!);
+      expect(urlTampered.origin).toBe("https://simpmind.tuanquynet.click");
+      expect(urlTampered.searchParams.get("state")).toBe("/c/maps/");
+
+      // 3. Forged signature using different key
+      const forgedKey = new Uint8Array(32).fill(42);
+      const forgedState = signOAuthState(
+        {
+          origin: "https://wisemapping-app.pages.dev",
+          redirect: "/c/maps/secret",
+          timestamp: Date.now(),
+        },
+        forgedKey,
+      );
+      const resForged = await app.request(
+        `/api/restful/oauth2/google/callback?code=mock-code&state=${forgedState}`,
+      );
+      expect(resForged.status).toBe(302);
+      const urlForged = new URL(resForged.headers.get("Location")!);
+      expect(urlForged.origin).toBe("https://simpmind.tuanquynet.click");
+      expect(urlForged.searchParams.get("state")).toBe("/c/maps/");
     });
   });
 });

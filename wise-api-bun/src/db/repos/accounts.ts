@@ -165,8 +165,8 @@ export async function upsertGoogleAccount(input: GoogleAccountInput): Promise<Ac
   if (existingRow.password_hash === null) {
     const upgraded = await dbAdapter.get<AccountRow>(
       `UPDATE account SET
-         firstname = ?1,
-         lastname = ?2,
+         firstname = COALESCE(NULLIF(firstname, ''), ?1),
+         lastname = COALESCE(NULLIF(lastname, ''), ?2),
          password_hash = 'OAUTH:GOOGLE',
          activated_at = COALESCE(activated_at, ?3)
        WHERE id = ?4
