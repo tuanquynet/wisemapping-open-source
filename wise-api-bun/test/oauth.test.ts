@@ -114,6 +114,28 @@ describe("OAuth2 routes", () => {
       const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
       expect(stateObj.origin).toBe("https://simpmind.tuanquynet.click");
     });
+    test("falls back to uiBaseUrl when corsAllowedOrigins contains '*' and origin is untrusted", async () => {
+      setConfig(
+        createTestConfig({
+          CORS_ALLOWED_ORIGINS: "*,https://wisemapping-app.pages.dev",
+        }),
+      );
+
+      const res = await app.request(
+        "/api/restful/oauth2/google/authorize?redirect=/c/maps/",
+        {
+          headers: {
+            Origin: "https://evil.attacker.com",
+          },
+        },
+      );
+
+      expect(res.status).toBe(302);
+      const url = new URL(res.headers.get("Location")!);
+      const stateObj = JSON.parse(atob(url.searchParams.get("state")!));
+      expect(stateObj.origin).toBe("https://simpmind.tuanquynet.click");
+    });
+
 
     test("validates redirect starts with /c/ and falls back to /c/maps/", async () => {
       const res = await app.request(
@@ -165,6 +187,30 @@ describe("OAuth2 routes", () => {
     test("handles user cancellation (error=access_denied) with redirect to login", async () => {
       const stateObj = {
         origin: "https://simpmind.tuanquynet.click",
+        redirect: "/c/maps/",
+      };
+      const state = btoa(JSON.stringify(stateObj));
+
+      const res = await app.request(
+        `/api/restful/oauth2/google/callback?error=access_denied&state=${state}`,
+      );
+
+      expect(res.status).toBe(302);
+      const location = res.headers.get("Location") || "";
+      expect(location).toBe(
+        "https://simpmind.tuanquynet.click/c/login?error=access_denied",
+      );
+    });
+
+    test("falls back to uiBaseUrl on callback when state origin is untrusted even if corsAllowedOrigins contains '*'", async () => {
+      setConfig(
+        createTestConfig({
+          CORS_ALLOWED_ORIGINS: "*",
+        }),
+      );
+
+      const stateObj = {
+        origin: "https://evil.attacker.com",
         redirect: "/c/maps/",
       };
       const state = btoa(JSON.stringify(stateObj));

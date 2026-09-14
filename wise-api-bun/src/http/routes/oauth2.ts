@@ -20,8 +20,8 @@ function resolveSafeOrigin(
 ): string {
   if (
     originCandidate &&
+    originCandidate !== "*" &&
     (appConfig.corsAllowedOrigins.includes(originCandidate) ||
-      appConfig.corsAllowedOrigins.includes("*") ||
       originCandidate === appConfig.uiBaseUrl)
   ) {
     return originCandidate;
