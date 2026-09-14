@@ -144,3 +144,155 @@ describe("profile column allowlist", () => {
     ).rejects.toThrow(/non-profile column/);
   });
 });
+
+describe("upsertGoogleAccount", () => {
+  test("creates a new account with OAUTH:GOOGLE and active status", async () => {
+    const account = await accounts.upsertGoogleAccount({
+      email: "newgoogle@example.com",
+      firstname: "Google",
+      lastname: "User",
+    });
+
+    expect(account.id).toBeGreaterThan(0);
+    expect(account.email).toBe("newgoogle@example.com");
+    expect(account.firstname).toBe("Google");
+    expect(account.lastname).toBe("User");
+    expect(account.isRegistered).toBe(true);
+    expect(account.activatedAt).toBeInstanceOf(Date);
+    expect(account.locale).toBe("en");
+
+    const hash = await accounts.passwordHashOf(account.id);
+    expect(hash).toBe("OAUTH:GOOGLE");
+  });
+
+  test("derives firstname fallback from email prefix or User when empty", async () => {
+    const account1 = await accounts.upsertGoogleAccount({
+      email: "fallbackuser@example.com",
+      firstname: "   ",
+      lastname: "   ",
+    });
+    expect(account1.firstname).toBe("fallbackuser");
+    expect(account1.lastname).toBe("");
+
+    const account2 = await accounts.upsertGoogleAccount({
+      email: " @example.com",
+      firstname: "",
+      lastname: "",
+    });
+    expect(account2.firstname).toBe("User");
+  });
+
+  test("upgrades an invitee placeholder preserving account ID and collaborations", async () => {
+    const placeholder = await accounts.createPlaceholder("invited@example.org");
+    expect(placeholder.isRegistered).toBe(false);
+    expect(await accounts.passwordHashOf(placeholder.id)).toBeNull();
+
+    // Create an owner account and mindmap to link a collaboration to the placeholder
+    const owner = await accounts.createOrUpgrade({
+      email: "owner@example.org",
+      firstname: "Map",
+      lastname: "Owner",
+      passwordHash: "HASH",
+      locale: "en",
+      activationCode: null,
+      activatedAt: Date.now(),
+    });
+
+    const now = Date.now();
+    const mapRow = db
+      .query<{ id: number }, [string, number, number, number, number, string]>(
+        `INSERT INTO mindmap (title, creator_id, last_editor_id, created_at, edited_at, source_type)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id`,
+      )
+      .get("Shared Map", owner.id, owner.id, now, now, "local")!;
+
+    db.run(
+      `INSERT INTO collaboration (mindmap_id, account_id, role, created_at)
+       VALUES (?1, ?2, 'editor', ?3)`,
+      [mapRow.id, placeholder.id, now],
+    );
+
+    const upgraded = await accounts.upsertGoogleAccount({
+      email: " INVITED@example.org ",
+      firstname: "Google",
+      lastname: "Invitee",
+    });
+
+    // Account ID must be preserved
+    expect(upgraded.id).toBe(placeholder.id);
+    expect(upgraded.email).toBe("invited@example.org");
+    expect(upgraded.firstname).toBe("Google");
+    expect(upgraded.lastname).toBe("Invitee");
+    expect(upgraded.isRegistered).toBe(true);
+    expect(upgraded.activatedAt).toBeInstanceOf(Date);
+    expect(await accounts.passwordHashOf(upgraded.id)).toBe("OAUTH:GOOGLE");
+
+    // Only 2 accounts exist: owner and upgraded placeholder
+    const countRow = db
+      .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM account`)
+      .get()!;
+    expect(countRow.n).toBe(2);
+
+    // Collaboration is intact and references the same upgraded account id
+    const collab = db
+      .query<{ account_id: number; role: string }, [number]>(
+        `SELECT account_id, role FROM collaboration WHERE mindmap_id = ?1`,
+      )
+      .get(mapRow.id)!;
+    expect(collab.account_id).toBe(placeholder.id);
+    expect(collab.role).toBe("editor");
+  });
+
+  test("auto-links existing inactive password account preserving password_hash and activating", async () => {
+    const inactive = await accounts.createOrUpgrade({
+      email: "passworduser@example.com",
+      firstname: "Existing",
+      lastname: "PasswordUser",
+      passwordHash: "BCRYPT_SECRET_HASH",
+      locale: "es",
+      activationCode: "ACT123",
+      activatedAt: null,
+    });
+    expect(inactive.activatedAt).toBeNull();
+
+    const linked = await accounts.upsertGoogleAccount({
+      email: "passworduser@example.com",
+      firstname: "DifferentFirst",
+      lastname: "DifferentLast",
+    });
+
+    expect(linked.id).toBe(inactive.id);
+    // Name is preserved from original account
+    expect(linked.firstname).toBe("Existing");
+    expect(linked.lastname).toBe("PasswordUser");
+    // Account is now activated
+    expect(linked.activatedAt).toBeInstanceOf(Date);
+    // Password hash is NOT overwritten
+    expect(await accounts.passwordHashOf(linked.id)).toBe("BCRYPT_SECRET_HASH");
+  });
+
+  test("auto-links existing active password account preserving password_hash and activation timestamp", async () => {
+    const originalActivatedAt = 1600000000000;
+    const active = await accounts.createOrUpgrade({
+      email: "activepass@example.com",
+      firstname: "Active",
+      lastname: "User",
+      passwordHash: "BCRYPT_ACTIVE_HASH",
+      locale: "fr",
+      activationCode: null,
+      activatedAt: originalActivatedAt,
+    });
+
+    const linked = await accounts.upsertGoogleAccount({
+      email: " ACTIVEPASS@example.com ",
+      firstname: "NewFirst",
+      lastname: "NewLast",
+    });
+
+    expect(linked.id).toBe(active.id);
+    expect(linked.firstname).toBe("Active");
+    expect(linked.lastname).toBe("User");
+    expect(linked.activatedAt?.getTime()).toBe(originalActivatedAt);
+    expect(await accounts.passwordHashOf(linked.id)).toBe("BCRYPT_ACTIVE_HASH");
+  });
+});
