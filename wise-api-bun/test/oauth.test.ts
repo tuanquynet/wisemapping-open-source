@@ -11,6 +11,11 @@ describe("OAuth2 routes", () => {
   const initialConfig = getConfig();
   const originalFetch = globalThis.fetch;
 
+  function mockFetch(
+    fn: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+  ) {
+    globalThis.fetch = fn as unknown as typeof fetch;
+  }
   function createTestConfig(overrides: Record<string, string | undefined> = {}) {
     return buildConfig({
       JWT_SECRET: VALID_JWT_SECRET,
@@ -250,9 +255,9 @@ describe("OAuth2 routes", () => {
 
     test("successfully exchanges code, upserts user, signs JWT, and redirects to /c/oauth-callback", async () => {
       let tokenRequestBody: string | null = null;
-      let userinfoAuthHeader: string | null = null;
+      let userinfoAuthHeader = null as string | null;
 
-      globalThis.fetch = async (
+      mockFetch(async (
         input: string | URL | Request,
         init?: RequestInit,
       ) => {
@@ -269,8 +274,8 @@ describe("OAuth2 routes", () => {
           );
         }
         if (url === "https://www.googleapis.com/oauth2/v3/userinfo") {
-          userinfoAuthHeader = (init?.headers as Record<string, string>)
-            ?.Authorization;
+          const headers = init?.headers as Record<string, string> | undefined;
+          userinfoAuthHeader = headers?.Authorization ?? null;
           return new Response(
             JSON.stringify({
               sub: "google-sub-12345",
@@ -284,7 +289,7 @@ describe("OAuth2 routes", () => {
           );
         }
         return new Response("Not found", { status: 404 });
-      };
+      });
 
       const stateObj = {
         origin: "https://simpmind.tuanquynet.click",
@@ -316,7 +321,7 @@ describe("OAuth2 routes", () => {
       expect(params.get("grant_type")).toBe("authorization_code");
 
       // Verify userinfo request
-      expect(userinfoAuthHeader).toBe("Bearer mock-google-token-xyz");
+      expect(userinfoAuthHeader as string | null).toBe("Bearer mock-google-token-xyz");
 
       // Verify callback redirect URL params
       const callbackUrl = new URL(location);
@@ -350,9 +355,12 @@ describe("OAuth2 routes", () => {
         firstname: "Existing",
         lastname: "Person",
         passwordHash: "BCRYPT_HASH_12345",
+        locale: null,
+        activationCode: null,
+        activatedAt: null,
       });
 
-      globalThis.fetch = async (input: string | URL | Request) => {
+      mockFetch(async (input: string | URL | Request) => {
         const url = String(input);
         if (url === "https://oauth2.googleapis.com/token") {
           return new Response(
@@ -371,7 +379,7 @@ describe("OAuth2 routes", () => {
           );
         }
         return new Response("Not found", { status: 404 });
-      };
+      });
 
       const res = await app.request(
         "/api/restful/oauth2/google/callback?code=mock-code",
@@ -386,13 +394,13 @@ describe("OAuth2 routes", () => {
     });
 
     test("handles failed token exchange with redirect to login?error=oauth_failed", async () => {
-      globalThis.fetch = async (input: string | URL | Request) => {
+      mockFetch(async (input: string | URL | Request) => {
         const url = String(input);
         if (url === "https://oauth2.googleapis.com/token") {
           return new Response("Invalid client secret", { status: 401 });
         }
         return new Response("Not found", { status: 404 });
-      };
+      });
 
       const res = await app.request(
         "/api/restful/oauth2/google/callback?code=bad-code",
@@ -405,7 +413,7 @@ describe("OAuth2 routes", () => {
     });
 
     test("handles missing access_token in token response", async () => {
-      globalThis.fetch = async (input: string | URL | Request) => {
+      mockFetch(async (input: string | URL | Request) => {
         const url = String(input);
         if (url === "https://oauth2.googleapis.com/token") {
           return new Response(JSON.stringify({}), {
@@ -413,7 +421,7 @@ describe("OAuth2 routes", () => {
           });
         }
         return new Response("Not found", { status: 404 });
-      };
+      });
 
       const res = await app.request(
         "/api/restful/oauth2/google/callback?code=bad-code",
@@ -426,7 +434,7 @@ describe("OAuth2 routes", () => {
     });
 
     test("handles failed userinfo fetch with redirect to login?error=oauth_failed", async () => {
-      globalThis.fetch = async (input: string | URL | Request) => {
+      mockFetch(async (input: string | URL | Request) => {
         const url = String(input);
         if (url === "https://oauth2.googleapis.com/token") {
           return new Response(
@@ -438,7 +446,7 @@ describe("OAuth2 routes", () => {
           return new Response("Unauthorized", { status: 401 });
         }
         return new Response("Not found", { status: 404 });
-      };
+      });
 
       const res = await app.request(
         "/api/restful/oauth2/google/callback?code=valid-code",
@@ -451,7 +459,7 @@ describe("OAuth2 routes", () => {
     });
 
     test("handles userinfo response missing email address", async () => {
-      globalThis.fetch = async (input: string | URL | Request) => {
+      mockFetch(async (input: string | URL | Request) => {
         const url = String(input);
         if (url === "https://oauth2.googleapis.com/token") {
           return new Response(
@@ -466,7 +474,7 @@ describe("OAuth2 routes", () => {
           );
         }
         return new Response("Not found", { status: 404 });
-      };
+      });
 
       const res = await app.request(
         "/api/restful/oauth2/google/callback?code=valid-code",
@@ -479,7 +487,7 @@ describe("OAuth2 routes", () => {
     });
 
     test("falls back to uiBaseUrl and /c/maps/ on invalid state string", async () => {
-      globalThis.fetch = async (input: string | URL | Request) => {
+      mockFetch(async (input: string | URL | Request) => {
         const url = String(input);
         if (url === "https://oauth2.googleapis.com/token") {
           return new Response(
@@ -494,7 +502,7 @@ describe("OAuth2 routes", () => {
           );
         }
         return new Response("Not found", { status: 404 });
-      };
+      });
 
       const res = await app.request(
         "/api/restful/oauth2/google/callback?code=mock-code&state=not-valid-base64",
