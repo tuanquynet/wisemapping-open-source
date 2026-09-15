@@ -34,6 +34,10 @@ export interface Config {
   readonly analyticsAccount: string;
   readonly mapListMaxSize: number;
   readonly noteMaxLength: number;
+  readonly googleOauthEnabled: boolean;
+  readonly googleClientId: string;
+  readonly googleClientSecret: string;
+  readonly googleOauthRedirectUri: string;
 }
 
 /**
@@ -123,6 +127,14 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     return "info";
   }
 
+  const googleClientId =
+    raw("GOOGLE_CLIENT_ID") ?? raw("GOOGLE_SSO_CLIENT_ID") ?? "";
+  const googleClientSecret =
+    raw("GOOGLE_CLIENT_SECRET") ?? raw("GOOGLE_SSO_CLIENT_SECRET") ?? "";
+  const googleOauthRedirectUri = str("GOOGLE_OAUTH_REDIRECT_URI", "").trim();
+  const googleOauthDefault =
+    googleClientId !== "" && googleClientSecret !== "";
+  const googleOauthEnabled = bool("GOOGLE_OAUTH_ENABLED", googleOauthDefault);
   const result: Config = Object.freeze({
     port: int("PORT", 8080),
     dbPath: str("DB_PATH", "./data/wisemapping.db"),
@@ -147,6 +159,11 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     analyticsAccount: str("ANALYTICS_ACCOUNT", ""),
     mapListMaxSize: int("MAP_LIST_MAX_SIZE", 500),
     noteMaxLength: int("NOTE_MAX_LENGTH", 10000),
+
+    googleOauthEnabled,
+    googleClientId,
+    googleClientSecret,
+    googleOauthRedirectUri,
   });
 
   if (problems.length > 0) {
@@ -200,4 +217,8 @@ export const config: Config = {
   get analyticsAccount() { return getConfig().analyticsAccount; },
   get mapListMaxSize() { return getConfig().mapListMaxSize; },
   get noteMaxLength() { return getConfig().noteMaxLength; },
+  get googleOauthEnabled() { return getConfig().googleOauthEnabled; },
+  get googleClientId() { return getConfig().googleClientId; },
+  get googleClientSecret() { return getConfig().googleClientSecret; },
+  get googleOauthRedirectUri() { return getConfig().googleOauthRedirectUri; },
 };

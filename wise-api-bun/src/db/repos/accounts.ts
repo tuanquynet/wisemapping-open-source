@@ -137,6 +137,56 @@ export async function createPlaceholder(email: string): Promise<Account> {
   return toAccount(row!);
 }
 
+export interface GoogleAccountInput {
+  email: string;
+  firstname: string;
+  lastname: string;
+}
+
+export async function upsertGoogleAccount(input: GoogleAccountInput): Promise<Account> {
+  const emailTrimmed = input.email.trim();
+  const emailLower = emailTrimmed.toLowerCase();
+  const now = Date.now();
+  const firstname = input.firstname.trim() || emailTrimmed.split("@")[0] || "User";
+  const lastname = input.lastname.trim();
+  const existingRow = await findRowByEmail(emailLower);
+
+  if (existingRow === null) {
+    const inserted = await dbAdapter.get<AccountRow>(
+      `INSERT INTO account (email, email_lower, firstname, lastname, password_hash,
+                            locale, activation_code, activated_at, created_at)
+       VALUES (?1, ?2, ?3, ?4, 'OAUTH:GOOGLE', 'en', NULL, ?5, ?5)
+       RETURNING *`,
+      [emailTrimmed, emailLower, firstname, lastname, now],
+    );
+    return toAccount(inserted!);
+  }
+
+  if (existingRow.password_hash === null) {
+    const upgraded = await dbAdapter.get<AccountRow>(
+      `UPDATE account SET
+         firstname = COALESCE(NULLIF(firstname, ''), ?1),
+         lastname = COALESCE(NULLIF(lastname, ''), ?2),
+         password_hash = 'OAUTH:GOOGLE',
+         activated_at = COALESCE(activated_at, ?3)
+       WHERE id = ?4
+       RETURNING *`,
+      [firstname, lastname, now, existingRow.id],
+    );
+    return toAccount(upgraded!);
+  }
+
+  if (existingRow.activated_at === null) {
+    const activated = await dbAdapter.get<AccountRow>(
+      `UPDATE account SET activated_at = ?1 WHERE id = ?2 RETURNING *`,
+      [now, existingRow.id],
+    );
+    return toAccount(activated!);
+  }
+
+  return toAccount(existingRow);
+}
+
 /** Columns the account self-service routes may write, as an allowlist. */
 const PROFILE_COLUMNS = {
   firstname: true,
