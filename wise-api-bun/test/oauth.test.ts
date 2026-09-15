@@ -118,6 +118,35 @@ describe("OAuth2 routes", () => {
       const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
       expect(stateObj.origin).toBe("https://wisemapping-app.pages.dev");
     });
+    test("uses origin from origin query parameter when in corsAllowedOrigins", async () => {
+      const res = await app.request(
+        "/api/restful/oauth2/google/authorize?redirect=/c/maps/&origin=https://wisemapping-app.pages.dev",
+      );
+
+      expect(res.status).toBe(302);
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
+      expect(stateObj.origin).toBe("https://wisemapping-app.pages.dev");
+    });
+
+    test("normalizes full URL in origin query parameter to origin only", async () => {
+      const res = await app.request(
+        "/api/restful/oauth2/google/authorize?redirect=/c/maps/&origin=https://wisemapping-app.pages.dev/c/login",
+      );
+
+      expect(res.status).toBe(302);
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
+      expect(stateObj.origin).toBe("https://wisemapping-app.pages.dev");
+    });
+
+    test("falls back to uiBaseUrl when origin query parameter is untrusted", async () => {
+      const res = await app.request(
+        "/api/restful/oauth2/google/authorize?redirect=/c/maps/&origin=https://evil.attacker.com",
+      );
+
+      expect(res.status).toBe(302);
+      const { payload: stateObj } = parseAuthorizeState(res.headers.get("Location")!);
+      expect(stateObj.origin).toBe("https://simpmind.tuanquynet.click");
+    });
 
     test("falls back to uiBaseUrl when Origin/Referer is not allowed", async () => {
       const res = await app.request(

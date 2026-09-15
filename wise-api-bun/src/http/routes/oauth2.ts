@@ -119,13 +119,14 @@ oauth2Routes.get("/google/authorize", (c) => {
     ? queryRedirect
     : "/c/maps/";
 
-  const reqOriginHeader = c.req.header("Origin") || c.req.header("Referer");
+  const rawCandidate =
+    c.req.query("origin") || c.req.header("Origin") || c.req.header("Referer");
   let candidateOrigin: string | undefined;
-  if (reqOriginHeader) {
+  if (rawCandidate) {
     try {
-      candidateOrigin = new URL(reqOriginHeader).origin;
+      candidateOrigin = new URL(rawCandidate).origin;
     } catch {
-      candidateOrigin = reqOriginHeader;
+      candidateOrigin = rawCandidate;
     }
   }
   const origin = resolveSafeOrigin(candidateOrigin, activeConfig);
