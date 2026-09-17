@@ -15,6 +15,8 @@ export interface Account {
   isRegistered: boolean;
   activatedAt: Date | null;
   createdAt: Date;
+  sessionEpoch?: number;
+  twoFactorReenrollRequired?: boolean;
 }
 
 export function fullName(account: Account): string {

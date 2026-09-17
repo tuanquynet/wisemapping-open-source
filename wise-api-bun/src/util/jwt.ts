@@ -22,15 +22,18 @@ export interface Claims {
   sub: string;
   iat: number;
   exp: number;
+  pur?: string;
+  se?: number;
 }
 
-export async function signToken(email: string): Promise<string> {
+export async function signToken(email: string, epoch: number = 0): Promise<string> {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const token = await sign(
     {
       sub: email,
       iat: nowSeconds,
       exp: nowSeconds + config.jwtExpirationMin * 60,
+      se: epoch,
     },
     getSecret(),
     ALG,
@@ -41,6 +44,24 @@ export async function signToken(email: string): Promise<string> {
     logger.warn(`Generated JWT is unusually large (${token.length} bytes)`);
   }
   return token;
+}
+
+/**
+ * Mints a short-lived challenge token for 2FA verification (D11, FR9).
+ * Carries `pur: "2fa_challenge"` and expires in 300 seconds (5 minutes).
+ */
+export async function signChallengeToken(email: string): Promise<string> {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return sign(
+    {
+      sub: email,
+      iat: nowSeconds,
+      exp: nowSeconds + 300,
+      pur: "2fa_challenge",
+    },
+    getSecret(),
+    ALG,
+  );
 }
 
 /** Returns the claims, or null for any malformed, mis-signed or expired token. */

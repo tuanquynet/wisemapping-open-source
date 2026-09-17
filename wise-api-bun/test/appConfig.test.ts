@@ -25,6 +25,7 @@ describe("GET /app/config", () => {
       registrationEnabled: config.registrationEnabled,
       recaptcha2Enabled: config.captchaEnabled,
       jwtExpirationMin: config.jwtExpirationMin,
+      twoFactorEnabled: config.twoFactorEnabled,
     };
     if (isGoogleEnabled) {
       expected.googleOauth2Url = `${config.apiBaseUrl}/api/restful/oauth2/google/authorize`;

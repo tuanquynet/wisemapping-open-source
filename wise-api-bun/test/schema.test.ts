@@ -13,6 +13,8 @@ describe("schema", () => {
     const db = freshDb();
     expect(tableNames(db)).toEqual([
       "account",
+      "account_recovery_code",
+      "account_totp",
       "collaboration",
       "comment",
       "mindmap",
@@ -20,6 +22,8 @@ describe("schema", () => {
       "mindmap_label",
       "mindmap_label_link",
       "mindmap_xml",
+      "security_event",
+      "trusted_device",
     ]);
     db.close();
   });
@@ -33,6 +37,10 @@ describe("schema", () => {
     expect(names).toContain("ux_collab_map_account");
     expect(names).toContain("ux_account_email_lower");
     expect(names).toContain("ix_comment_map_topic_created");
+    expect(names).toContain("ux_recovery_code_hash");
+    expect(names).toContain("ix_recovery_code_unused");
+    expect(names).toContain("ix_trusted_device_account");
+    expect(names).toContain("ix_security_event_account");
     db.close();
   });
 
@@ -46,11 +54,30 @@ describe("schema", () => {
 
   test("migration is idempotent and records its version", () => {
     const db = freshDb();
-    expect(userVersion(db)).toBe(2);
+    expect(userVersion(db)).toBe(4);
     // Re-running must be a no-op rather than an error.
     const { migrate } = require("../src/db/migrate.ts");
     migrate(db);
-    expect(userVersion(db)).toBe(2);
+    expect(userVersion(db)).toBe(4);
+    db.close();
+  });
+
+  test("account gains session_epoch and two_factor_reenroll_required defaults", () => {
+    const db = freshDb();
+    db.run(
+      `INSERT INTO account (email, email_lower, created_at) VALUES (?1, ?2, ?3)`,
+      ["default-cols@example.com", "default-cols@example.com", Date.now()],
+    );
+    const row = db
+      .query<
+        { session_epoch: number; two_factor_reenroll_required: number },
+        []
+      >(
+        `SELECT session_epoch, two_factor_reenroll_required FROM account WHERE email_lower = 'default-cols@example.com'`,
+      )
+      .get()!;
+    expect(row.session_epoch).toBe(0);
+    expect(row.two_factor_reenroll_required).toBe(0);
     db.close();
   });
 });
@@ -170,6 +197,45 @@ describe("schema constraints", () => {
     expect(count("mindmap_xml")).toBe(0);
     expect(count("mindmap_history")).toBe(0);
     expect(count("collaboration")).toBe(0);
+    db.close();
+  });
+
+  test("cascades account deletion to two-factor tables and retains security_event", () => {
+    const db = freshDb();
+    const uid = seedAccount(db, "2fa-cascade@example.org");
+    const now = Date.now();
+
+    db.run(
+      `INSERT INTO account_totp (account_id, secret_cipher, status, created_at)
+       VALUES (?, 'cipher', 'active', ?)`,
+      [uid, now],
+    );
+    db.run(
+      `INSERT INTO account_recovery_code (account_id, code_hash, generation, created_at)
+       VALUES (?, 'hash', 1, ?)`,
+      [uid, now],
+    );
+    db.run(
+      `INSERT INTO trusted_device (account_id, token_hash, label, created_at, expires_at)
+       VALUES (?, 'tokenhash', 'Chrome', ?, ?)`,
+      [uid, now, now + 30 * 86400000],
+    );
+    db.run(
+      `INSERT INTO security_event (affected_account_id, actor_email, action, outcome, created_at)
+       VALUES (?, 'admin@example.org', 'enrollment_activated', 'success', ?)`,
+      [uid, now],
+    );
+
+    db.run(`DELETE FROM account WHERE id = ?`, [uid]);
+
+    const count = (table: string) =>
+      db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()!
+        .n;
+    expect(count("account_totp")).toBe(0);
+    expect(count("account_recovery_code")).toBe(0);
+    expect(count("trusted_device")).toBe(0);
+    // security_event has affected_account_id ON DELETE CASCADE per DDL; both affected tables are cleared
+    expect(count("security_event")).toBe(0);
     db.close();
   });
 

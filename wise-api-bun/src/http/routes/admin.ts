@@ -5,6 +5,11 @@ import * as mindmaps from "../../db/repos/mindmaps.ts";
 import * as mindmapXml from "../../db/repos/mindmapXml.ts";
 import { isAdmin } from "../../services/authService.ts";
 import { requireAdmin } from "../middleware/requireAdmin.ts";
+import { requireTwoFactorReset } from "../middleware/requireTwoFactorReset.ts";
+import { currentUser } from "../middleware/requireUser.ts";
+import * as twoFactorAdminService from "../../services/twoFactorAdminService.ts";
+import * as securityEventRepo from "../../db/repos/securityEventRepo.ts";
+import type { RestSecurityEvent } from "../dto/restTwoFactor.ts";
 import { toRestUser, type RestUser } from "../dto/restUser.ts";
 import { toAdminRestMap, type AdminRestMap } from "../dto/adminRestMap.ts";
 import { bunPasswordHasher, type PasswordHasher } from "../../util/passwordHash.ts";
@@ -17,9 +22,75 @@ function resolvePasswordHasher(c: Context<Env>): PasswordHasher {
 
 export const adminRoutes = new Hono<Env>();
 
-// All admin routes require admin privileges
-adminRoutes.use("*", requireAdmin);
+// All admin routes require admin privileges, except dedicated 2FA reset/audit routes (D13, FR29, FR35)
+adminRoutes.use("*", async (c, next) => {
+  if (
+    c.req.path.includes("/twoFactor/reset") ||
+    c.req.path.includes("/admin/securityEvents")
+  ) {
+    return next();
+  }
+  return requireAdmin(c, next);
+});
 
+/**
+ * POST /api/restful/admin/users/:id/twoFactor/reset (FR29-FR35, D13, D14).
+ *
+ * Gated by requireTwoFactorReset: dedicated permission allowlist (FR29, FR35).
+ * Resets another user's two-factor authentication.
+ */
+adminRoutes.post(
+  "/users/:id/twoFactor/reset",
+  requireTwoFactorReset,
+  async (c) => {
+    const adminUser = currentUser(c);
+    const targetUserId = Number.parseInt(c.req.param("id"), 10);
+    if (Number.isNaN(targetUserId)) {
+      return c.text("Invalid user ID", 400);
+    }
+
+    const body = (await c.req.json().catch(() => null)) as {
+      password?: unknown;
+      reason?: unknown;
+    } | null;
+
+    const passwordInput = typeof body?.password === "string" ? body.password : "";
+    const reasonInput = typeof body?.reason === "string" ? body.reason : "";
+
+    if (reasonInput.trim().length === 0) {
+      return c.json(
+        {
+          globalSeverity: "ERROR",
+          globalErrors: [],
+          fieldErrors: { reason: "A reason is required to reset two-step verification." },
+        },
+        400,
+      );
+    }
+
+    if (passwordInput.trim().length === 0) {
+      return c.json(
+        {
+          globalSeverity: "ERROR",
+          globalErrors: [],
+          fieldErrors: { password: "Administrator password is required." },
+        },
+        400,
+      );
+    }
+
+    const hasher = resolvePasswordHasher(c);
+    await twoFactorAdminService.approveReset({
+      adminUser,
+      targetUserId,
+      passwordInput,
+      reasonInput,
+      hasher,
+    });
+
+    return c.body(null, 204);
+  },
+);
 export interface PaginatedResponse<T> {
   data: T[];
   page: number;
@@ -29,6 +100,92 @@ export interface PaginatedResponse<T> {
   hasNext: boolean;
   hasPrevious: boolean;
 }
+
+/**
+ * GET /api/restful/admin/securityEvents
+ *
+ * Gated by requireTwoFactorReset: dedicated permission allowlist (FR29, FR35).
+ * Paginated listing of security audit events with filtering by account, action, date range (FR37, UX-DR21).
+ * Never exposes secrets or code material (FR38).
+ */
+adminRoutes.get("/securityEvents", requireTwoFactorReset, async (c) => {
+  const pageRaw = c.req.query("page");
+  const pageSizeRaw = c.req.query("pageSize");
+  const account = c.req.query("account");
+  const action = c.req.query("action");
+  const fromDateRaw = c.req.query("fromDate");
+  const toDateRaw = c.req.query("toDate");
+
+  const page = Math.max(0, pageRaw ? parseInt(pageRaw, 10) || 0 : 0);
+  const pageSize = Math.min(
+    200,
+    Math.max(1, pageSizeRaw ? parseInt(pageSizeRaw, 10) || 20 : 20),
+  );
+
+  let fromDate: number | undefined;
+  if (fromDateRaw) {
+    const parsed = Number(fromDateRaw);
+    if (!Number.isNaN(parsed)) {
+      fromDate = parsed;
+    } else {
+      const dt = Date.parse(fromDateRaw);
+      if (!Number.isNaN(dt)) fromDate = dt;
+    }
+  }
+
+  let toDate: number | undefined;
+  if (toDateRaw) {
+    const parsed = Number(toDateRaw);
+    if (!Number.isNaN(parsed)) {
+      toDate = parsed;
+    } else {
+      const dt = Date.parse(toDateRaw);
+      if (!Number.isNaN(dt)) toDate = dt;
+    }
+  }
+
+  const filterOpts: securityEventRepo.SecurityEventsFilterOptions = {
+    page,
+    pageSize,
+    account,
+    action,
+    fromDate,
+    toDate,
+  };
+
+  const [eventList, totalElements] = await Promise.all([
+    securityEventRepo.findSecurityEventsWithFilters(filterOpts),
+    securityEventRepo.countSecurityEventsWithFilters(filterOpts),
+  ]);
+
+  const totalPages = Math.ceil(totalElements / pageSize);
+  const hasNext = page < totalPages - 1;
+  const hasPrevious = page > 0;
+
+  const data: RestSecurityEvent[] = eventList.map((e) => ({
+    id: e.id,
+    actorEmail: e.actor_email,
+    action: e.action,
+    outcome: e.outcome,
+    reason: e.reason ?? null,
+    detail: e.detail ?? null,
+    createdAt: e.created_at,
+    affectedAccountId: e.affected_account_id,
+    affectedAccountEmail: e.affected_account_email ?? null,
+  }));
+
+  const response: PaginatedResponse<RestSecurityEvent> = {
+    data,
+    page,
+    pageSize,
+    totalElements,
+    totalPages,
+    hasNext,
+    hasPrevious,
+  };
+
+  return c.json(response, 200);
+});
 
 /**
  * GET /api/restful/admin/users

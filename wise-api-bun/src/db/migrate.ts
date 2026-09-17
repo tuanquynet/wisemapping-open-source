@@ -2,6 +2,8 @@ import type { Database } from "bun:sqlite";
 
 import schemaSql from "./schema.sql" with { type: "text" };
 import addCommentsSql from "../../migrations/0002_add_comments.sql" with { type: "text" };
+import twoFactorSql from "../../migrations/0003_add_two_factor.sql" with { type: "text" };
+import pendingSecretCipherSql from "../../migrations/0004_add_pending_secret_cipher.sql" with { type: "text" };
 
 /**
  * Migrations, versioned with `PRAGMA user_version`.
@@ -14,6 +16,8 @@ const steps: readonly { readonly description: string; readonly sql: string }[] =
   [
     { description: "base schema", sql: schemaSql },
     { description: "add comment table", sql: addCommentsSql },
+    { description: "add two-factor tables", sql: twoFactorSql },
+    { description: "add pending secret cipher for authenticator replacement", sql: pendingSecretCipherSql },
   ];
 export function migrate(db: Database): void {
   const current = db

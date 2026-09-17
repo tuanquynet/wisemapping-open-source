@@ -38,6 +38,9 @@ export interface Config {
   readonly googleClientId: string;
   readonly googleClientSecret: string;
   readonly googleOauthRedirectUri: string;
+  readonly twoFactorEnabled: boolean;
+  readonly twoFactorSecretKey: Uint8Array;
+  readonly twoFactorResetEmails: string[];
 }
 
 /**
@@ -127,6 +130,55 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     return "info";
   }
 
+  const twoFactorEnabled = bool("TWO_FACTOR_ENABLED", false);
+
+  function twoFactorKey(): Uint8Array {
+    const encoded =
+      raw("TWO_FACTOR_SECRET_KEY") ?? raw("TWO_FACTOR_ENCRYPTION_KEY");
+    if (encoded === undefined || encoded === "") {
+      if (twoFactorEnabled) {
+        problems.push(
+          "TWO_FACTOR_SECRET_KEY is required when TWO_FACTOR_ENABLED is true. " +
+            "Generate one with: openssl rand -base64 32",
+        );
+      }
+      return new Uint8Array();
+    }
+    if (!twoFactorEnabled) {
+      return new Uint8Array();
+    }
+
+    let decoded: Uint8Array;
+    try {
+      decoded = Uint8Array.from(atob(encoded.trim()), (c) => c.charCodeAt(0));
+    } catch {
+      problems.push("TWO_FACTOR_SECRET_KEY must be valid base64");
+      return new Uint8Array();
+    }
+    if (decoded.length !== 32) {
+      problems.push(
+        `TWO_FACTOR_SECRET_KEY must decode to exactly 32 bytes (got ${decoded.length}); use: openssl rand -base64 32`,
+      );
+    }
+    return decoded;
+  }
+
+  const adminEmail = str("ADMIN_EMAIL", "").trim().toLowerCase();
+  const resetEmailsRaw = env["TWO_FACTOR_RESET_EMAILS"];
+  const twoFactorResetEmails = (() => {
+    if (resetEmailsRaw === undefined) {
+      return adminEmail !== "" ? [adminEmail] : [];
+    }
+    if (resetEmailsRaw.trim() === "") {
+      return [];
+    }
+    const parsed = csv("TWO_FACTOR_RESET_EMAILS", [])
+      .map((e) => e.toLowerCase())
+      .filter((e) => e.length > 0);
+    return Array.from(new Set(parsed));
+  })();
+
+
   const googleClientId =
     raw("GOOGLE_CLIENT_ID") ?? raw("GOOGLE_SSO_CLIENT_ID") ?? "";
   const googleClientSecret =
@@ -143,7 +195,7 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     jwtKey: jwtKey(),
     jwtExpirationMin: int("JWT_EXPIRATION_MIN", 10080),
 
-    adminEmail: str("ADMIN_EMAIL", "").trim().toLowerCase(),
+    adminEmail,
 
     uiBaseUrl: str("UI_BASE_URL", "http://localhost:3000"),
     apiBaseUrl: str("API_BASE_URL", "http://localhost:8080"),
@@ -164,6 +216,9 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
     googleClientId,
     googleClientSecret,
     googleOauthRedirectUri,
+    twoFactorEnabled,
+    twoFactorSecretKey: twoFactorKey(),
+    twoFactorResetEmails,
   });
 
   if (problems.length > 0) {
@@ -221,4 +276,7 @@ export const config: Config = {
   get googleClientId() { return getConfig().googleClientId; },
   get googleClientSecret() { return getConfig().googleClientSecret; },
   get googleOauthRedirectUri() { return getConfig().googleOauthRedirectUri; },
+  get twoFactorEnabled() { return getConfig().twoFactorEnabled; },
+  get twoFactorSecretKey() { return getConfig().twoFactorSecretKey; },
+  get twoFactorResetEmails() { return getConfig().twoFactorResetEmails; },
 };

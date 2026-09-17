@@ -149,4 +149,144 @@ describe("buildConfig", () => {
     );
     expect(enabledExplicitly.googleOauthEnabled).toBe(true);
   });
+
+  test("twoFactorEnabled defaults to false and twoFactorSecretKey is empty", () => {
+    const cfg = buildConfig(baseEnv());
+    expect(cfg.twoFactorEnabled).toBe(false);
+    expect(cfg.twoFactorSecretKey).toBeInstanceOf(Uint8Array);
+    expect(cfg.twoFactorSecretKey.length).toBe(0);
+  });
+
+  test("throws ConfigError when TWO_FACTOR_ENABLED is true and TWO_FACTOR_SECRET_KEY is missing", () => {
+    expect(() =>
+      buildConfig(baseEnv({ TWO_FACTOR_ENABLED: "true" })),
+    ).toThrow(ConfigError);
+  });
+
+  test("throws ConfigError when TWO_FACTOR_ENABLED is true and TWO_FACTOR_SECRET_KEY decodes to fewer than 32 bytes", () => {
+    const shortKey = Buffer.from("short").toString("base64");
+    expect(() =>
+      buildConfig(
+        baseEnv({
+          TWO_FACTOR_ENABLED: "true",
+          TWO_FACTOR_SECRET_KEY: shortKey,
+        }),
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  test("throws ConfigError when TWO_FACTOR_ENABLED is true and TWO_FACTOR_SECRET_KEY decodes to more than 32 bytes", () => {
+    const longKey = Buffer.from("a".repeat(48)).toString("base64");
+    expect(() =>
+      buildConfig(
+        baseEnv({
+          TWO_FACTOR_ENABLED: "true",
+          TWO_FACTOR_SECRET_KEY: longKey,
+        }),
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  test("throws ConfigError when TWO_FACTOR_ENABLED is true and TWO_FACTOR_SECRET_KEY is invalid base64", () => {
+    expect(() =>
+      buildConfig(
+        baseEnv({
+          TWO_FACTOR_ENABLED: "true",
+          TWO_FACTOR_SECRET_KEY: "not-valid-base64!!!",
+        }),
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  test("does not throw when TWO_FACTOR_ENABLED is false even if TWO_FACTOR_SECRET_KEY is invalid", () => {
+    expect(() =>
+      buildConfig(
+        baseEnv({
+          TWO_FACTOR_ENABLED: "false",
+          TWO_FACTOR_SECRET_KEY: "invalid-key",
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  test("accepts valid 32-byte base64 TWO_FACTOR_SECRET_KEY", () => {
+    const validKey = Buffer.from("a".repeat(32)).toString("base64");
+    const cfg = buildConfig(
+      baseEnv({
+        TWO_FACTOR_ENABLED: "true",
+        TWO_FACTOR_SECRET_KEY: validKey,
+      }),
+    );
+    expect(cfg.twoFactorEnabled).toBe(true);
+    expect(cfg.twoFactorSecretKey.length).toBe(32);
+  });
+
+  test("accepts fallback alias TWO_FACTOR_ENCRYPTION_KEY", () => {
+    const validKey = Buffer.from("b".repeat(32)).toString("base64");
+    const cfg = buildConfig(
+      baseEnv({
+        TWO_FACTOR_ENABLED: "true",
+        TWO_FACTOR_ENCRYPTION_KEY: validKey,
+      }),
+    );
+    expect(cfg.twoFactorEnabled).toBe(true);
+    expect(cfg.twoFactorSecretKey.length).toBe(32);
+  });
+
+  test("TWO_FACTOR_SECRET_KEY takes precedence over TWO_FACTOR_ENCRYPTION_KEY", () => {
+    const primaryKey = Buffer.from("p".repeat(32)).toString("base64");
+    const aliasKey = Buffer.from("a".repeat(32)).toString("base64");
+    const cfg = buildConfig(
+      baseEnv({
+        TWO_FACTOR_ENABLED: "true",
+        TWO_FACTOR_SECRET_KEY: primaryKey,
+        TWO_FACTOR_ENCRYPTION_KEY: aliasKey,
+      }),
+    );
+    expect(cfg.twoFactorSecretKey).toEqual(
+      new Uint8Array(Buffer.from("p".repeat(32))),
+    );
+  });
+
+  test("twoFactorResetEmails defaults to [adminEmail] when ADMIN_EMAIL is configured", () => {
+    const cfg = buildConfig(baseEnv({ ADMIN_EMAIL: "admin@wisemapping.org" }));
+    expect(cfg.twoFactorResetEmails).toEqual(["admin@wisemapping.org"]);
+  });
+
+  test("twoFactorResetEmails defaults to empty array when ADMIN_EMAIL is empty or unset", () => {
+    const cfg = buildConfig(baseEnv({ ADMIN_EMAIL: "" }));
+    expect(cfg.twoFactorResetEmails).toEqual([]);
+  });
+
+  test("twoFactorResetEmails parses comma-separated list and trims/lowercases entries", () => {
+    const cfg = buildConfig(
+      baseEnv({
+        ADMIN_EMAIL: "default-admin@wisemapping.org",
+        TWO_FACTOR_RESET_EMAILS: "Admin1@example.com, Admin2@example.com , ",
+      }),
+    );
+    expect(cfg.twoFactorResetEmails).toEqual([
+      "admin1@example.com",
+      "admin2@example.com",
+    ]);
+  });
+
+  test("twoFactorResetEmails returns empty array when explicitly set to whitespace", () => {
+    const cfg = buildConfig(
+      baseEnv({
+        ADMIN_EMAIL: "admin@wisemapping.org",
+        TWO_FACTOR_RESET_EMAILS: "   ",
+      }),
+    );
+    expect(cfg.twoFactorResetEmails).toEqual([]);
+  });
+
+  test("twoFactorResetEmails deduplicates duplicate entries", () => {
+    const cfg = buildConfig(
+      baseEnv({
+        TWO_FACTOR_RESET_EMAILS: "admin@example.com, ADMIN@example.com",
+      }),
+    );
+    expect(cfg.twoFactorResetEmails).toEqual(["admin@example.com"]);
+  });
 });

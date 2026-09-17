@@ -23,6 +23,7 @@ export interface RestAppConfig {
   recaptcha2SiteKey?: string;
   analyticsAccount?: string;
   jwtExpirationMin: number;
+  twoFactorEnabled: boolean;
 }
 
 /**
@@ -44,6 +45,7 @@ export function buildAppConfig(config: Config): RestAppConfig {
     registrationEnabled: config.registrationEnabled,
     recaptcha2Enabled: config.captchaEnabled,
     jwtExpirationMin: config.jwtExpirationMin,
+    twoFactorEnabled: config.twoFactorEnabled,
   };
 
   if (googleEnabled) {

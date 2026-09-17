@@ -12,6 +12,7 @@ import { labelRoutes } from "./http/routes/labels.ts";
 import { mapRoutes } from "./http/routes/maps.ts";
 import { oauth2Routes } from "./http/routes/oauth2.ts";
 import { userRoutes } from "./http/routes/users.ts";
+import { twoFactorRoutes } from "./http/routes/twoFactor.ts";
 import type { Env } from "./http/env.ts";
 
 /**
@@ -39,7 +40,7 @@ app.use(
     },
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
-    exposeHeaders: ["Authorization", "Location", "ResourceId"],
+    exposeHeaders: ["Authorization", "Location", "ResourceId", "X-Device-Token"],
     maxAge: 3600,
     credentials: true,
   }),
@@ -62,6 +63,7 @@ app.route("/api/restful/labels", labelRoutes);
 app.route("/api/restful/admin", adminRoutes);
 app.route("/api/restful/oauth2", oauth2Routes);
 // authRoutes owns /authenticate and /logout, which sit directly under /restful.
+app.route("/api/restful/twoFactor", twoFactorRoutes);
 app.route("/api/restful", authRoutes);
 
 export type App = typeof app;

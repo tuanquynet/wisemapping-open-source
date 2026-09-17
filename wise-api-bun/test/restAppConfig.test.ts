@@ -41,6 +41,7 @@ describe("buildAppConfig", () => {
     expect(result.facebookOauth2Enabled).toBe(false);
     expect("googleOauth2Url" in result).toBe(false);
     expect("facebookOauth2Url" in result).toBe(false);
+    expect(result.twoFactorEnabled).toBe(false);
   });
 
   test("Google OAuth2 is enabled and includes authorize URL when configured", () => {
@@ -100,5 +101,16 @@ describe("buildAppConfig", () => {
 
     expect(result.recaptcha2SiteKey).toBe("site-key-123");
     expect(result.analyticsAccount).toBe("G-ABC123");
+  });
+
+  test("twoFactorEnabled is true when enabled in config", () => {
+    const validKey = Buffer.from("k".repeat(32)).toString("base64");
+    const config = buildConfig({
+      JWT_SECRET: VALID_JWT_SECRET,
+      TWO_FACTOR_ENABLED: "true",
+      TWO_FACTOR_SECRET_KEY: validKey,
+    });
+    const result = buildAppConfig(config);
+    expect(result.twoFactorEnabled).toBe(true);
   });
 });

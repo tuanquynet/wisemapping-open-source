@@ -6,6 +6,11 @@ import { bunLockManager } from "../../services/lockManager.ts";
 import type { LockManager } from "../../services/lockManager.interface.ts";
 import { BadRequestError } from "../../domain/errors.ts";
 import type { Env } from "../env.ts";
+import { config } from "../../config.ts";
+import { signToken, signChallengeToken } from "../../util/jwt.ts";
+import * as twoFactorRepo from "../../db/repos/twoFactorRepo.ts";
+import * as trustedDeviceRepo from "../../db/repos/trustedDeviceRepo.ts";
+import { hashDeviceToken } from "../../util/deviceToken.ts";
 
 export const authRoutes = new Hono<Env>();
 
@@ -40,8 +45,40 @@ authRoutes.post("/authenticate", async (c) => {
     email?: unknown;
     password?: unknown;
   };
-  const token = await authService.login(email, password, resolvePasswordHasher(c));
+  const account = await authService.verifyCredentials(email, password, resolvePasswordHasher(c));
 
+  const cfg = c.get("config") ?? config;
+  if (cfg.twoFactorEnabled) {
+    const twoFactorStatus = await twoFactorRepo.getStatus(account.id);
+    if (twoFactorStatus.enabled) {
+      // Check if client presented a valid, live trusted device token (FR16, D11, D12)
+      const deviceTokenHeader = c.req.header("X-Device-Token");
+      if (deviceTokenHeader) {
+        const tokenHash = await hashDeviceToken(deviceTokenHeader);
+        const liveDevice = await trustedDeviceRepo.findLiveDevice(account.id, tokenHash);
+        if (liveDevice !== null) {
+          await trustedDeviceRepo.touchDevice(liveDevice.id);
+          // Bypass 2FA challenge!
+          const token = await signToken(account.email.toLowerCase(), account.session_epoch);
+          c.header("Authorization", `Bearer ${token}`);
+          return c.text(token);
+        }
+      }
+
+      const challengeToken = await signChallengeToken(account.email);
+      return c.json(
+        {
+          action: "TWO_FACTOR_REQUIRED",
+          challengeToken,
+          expiresInSec: 300,
+          recoveryAvailable: twoFactorStatus.recoveryCodesRemaining > 0,
+        },
+        202,
+      );
+    }
+  }
+
+  const token = await signToken(account.email.toLowerCase(), account.session_epoch);
   c.header("Authorization", `Bearer ${token}`);
   return c.text(token);
 });

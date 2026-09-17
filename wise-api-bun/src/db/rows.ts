@@ -19,6 +19,8 @@ export interface AccountRow {
   reset_token: string | null;
   reset_token_expires: number | null;
   created_at: number;
+  session_epoch: number;
+  two_factor_reenroll_required: 0 | 1;
 }
 
 export interface MindmapRow {
@@ -66,5 +68,48 @@ export interface CommentRow {
   topic_id: string;
   author_id: number;
   body: string;
+  created_at: number;
+}
+
+export interface AccountTotpRow {
+  account_id: number;
+  secret_cipher: string;
+  status: "pending" | "active";
+  last_accepted_step: number | null;
+  failed_attempts: number;
+  cooldown_until: number | null;
+  created_at: number;
+  activated_at: number | null;
+  pending_secret_cipher: string | null;
+}
+
+export interface AccountRecoveryCodeRow {
+  id: number;
+  account_id: number;
+  code_hash: string;
+  generation: number;
+  used_at: number | null;
+  created_at: number;
+}
+
+export interface TrustedDeviceRow {
+  id: number;
+  account_id: number;
+  token_hash: string;
+  label: string;
+  created_at: number;
+  expires_at: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+}
+
+export interface SecurityEventRow {
+  id: number;
+  affected_account_id: number;
+  actor_email: string;
+  action: string;
+  outcome: "success" | "failure";
+  reason: string | null;
+  detail: string | null;
   created_at: number;
 }

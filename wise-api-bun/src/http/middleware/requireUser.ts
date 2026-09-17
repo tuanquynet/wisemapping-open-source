@@ -12,9 +12,33 @@ import type { Env } from "../env.ts";
  * is the contract.
  */
 export const requireUser = createMiddleware<Env>(async (c, next) => {
-  if (c.get("user") === null) {
+  const user = c.get("user");
+  if (user === null) {
     return c.json(unauthorizedBody(), 401);
   }
+
+  // D14, FR33: Post-reset restricted state gate
+  if (user.twoFactorReenrollRequired) {
+    const path = c.req.path;
+    const isExempt =
+      path === "/api/restful/account" ||
+      path.startsWith("/api/restful/account/twoFactor") ||
+      path.startsWith("/api/restful/account/securityEvents") ||
+      path === "/api/restful/logout";
+
+    if (!isExempt) {
+      return c.json(
+        {
+          globalSeverity: "ERROR",
+          globalErrors: ["Two-step verification re-enrollment required."],
+          fieldErrors: {},
+          code: "2FA_REENROLL_REQUIRED",
+        },
+        403,
+      );
+    }
+  }
+
   await next();
 });
 

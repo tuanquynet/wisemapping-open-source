@@ -257,7 +257,7 @@ oauth2Routes.get("/google/callback", async (c) => {
       lastname: profile.family_name || "",
     });
 
-    const jwtToken = await signToken(account.email.toLowerCase());
+    const jwtToken = await signToken(account.email.toLowerCase(), account.sessionEpoch);
 
     const base = uiOrigin.endsWith("/") ? uiOrigin.slice(0, -1) : uiOrigin;
     const redirectUrl = new URL(`${base}/c/oauth-callback`);

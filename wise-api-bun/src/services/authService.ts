@@ -1,6 +1,7 @@
 import * as accounts from "../db/repos/accounts.ts";
 import { config } from "../config.ts";
 import type { Account } from "../domain/types.ts";
+import type { AccountRow } from "../db/rows.ts";
 import {
   AccountNotActivatedError,
   BadRequestError,
@@ -155,11 +156,11 @@ export async function activate(code: string): Promise<void> {
  * wrong password produce the same error, and the not-activated check comes after
  * the password check so it cannot be used to enumerate accounts.
  */
-export async function login(
+export async function verifyCredentials(
   emailInput: unknown,
   passwordInput: unknown,
   hasher: PasswordHasher = bunPasswordHasher,
-): Promise<string> {
+): Promise<AccountRow> {
   const email = asString(emailInput).trim();
   const password = asString(passwordInput);
 
@@ -180,7 +181,16 @@ export async function login(
     throw new AccountNotActivatedError();
   }
 
-  return signToken(row.email.toLowerCase());
+  return row;
+}
+
+export async function login(
+  emailInput: unknown,
+  passwordInput: unknown,
+  hasher: PasswordHasher = bunPasswordHasher,
+): Promise<string> {
+  const row = await verifyCredentials(emailInput, passwordInput, hasher);
+  return signToken(row.email.toLowerCase(), row.session_epoch);
 }
 
 /**

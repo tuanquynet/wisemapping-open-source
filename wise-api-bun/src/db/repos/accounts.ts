@@ -25,6 +25,8 @@ export function toAccount(row: AccountRow): Account {
     isRegistered: row.password_hash !== null,
     activatedAt: row.activated_at === null ? null : new Date(row.activated_at),
     createdAt: new Date(row.created_at),
+    sessionEpoch: row.session_epoch ?? 0,
+    twoFactorReenrollRequired: Boolean(row.two_factor_reenroll_required),
   };
 }
 
@@ -342,4 +344,26 @@ export async function countWithFilters(
   const sql = `SELECT COUNT(*) as count FROM account ${where}`;
   const row = await dbAdapter.get<{ count: number }>(sql, params);
   return row?.count ?? 0;
+}
+
+/**
+ * Increments the account's session_epoch by 1, instantly revoking all outstanding sessions (D9, FR32).
+ * Returns the new session epoch.
+ */
+export async function bumpSessionEpoch(accountId: number): Promise<number> {
+  const res = await dbAdapter.get<{ session_epoch: number }>(
+    "UPDATE account SET session_epoch = session_epoch + 1 WHERE id = ? RETURNING session_epoch",
+    [accountId],
+  );
+  return res?.session_epoch ?? 1;
+}
+
+/**
+ * Clears the two_factor_reenroll_required flag once the user re-enrolls (FR33, D14).
+ */
+export function clearReenrollRequired(accountId: number): Promise<void> {
+  return dbAdapter.run(
+    "UPDATE account SET two_factor_reenroll_required = 0 WHERE id = ?",
+    [accountId],
+  );
 }

@@ -23,6 +23,11 @@ export const jwt = createMiddleware<Env>(async (c, next) => {
   if (token !== null) {
     const claims = await verifyToken(token);
     if (claims !== null) {
+      // Challenge tokens cannot satisfy session authentication (FR9)
+      if (claims.pur === "2fa_challenge") {
+        await next();
+        return;
+      }
       const account = await accounts.findByEmail(claims.sub);
       // A placeholder or unactivated account must not count as authenticated.
       if (
@@ -30,7 +35,13 @@ export const jwt = createMiddleware<Env>(async (c, next) => {
         account.isRegistered &&
         account.activatedAt !== null
       ) {
-        c.set("user", account);
+        // D9, AR11: Compare token's se claim against account's sessionEpoch.
+        // A token missing se is treated as epoch 0 (for legacy / pre-existing tokens per FR39).
+        const tokenEpoch = typeof claims.se === "number" ? claims.se : 0;
+        const currentEpoch = account.sessionEpoch ?? 0;
+        if (tokenEpoch >= currentEpoch) {
+          c.set("user", account);
+        }
       }
     }
   }
