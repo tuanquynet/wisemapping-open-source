@@ -134,7 +134,7 @@ export function buildConfig(env: Record<string, string | undefined>): Config {
 
   function twoFactorKey(): Uint8Array {
     const encoded =
-      raw("TWO_FACTOR_SECRET_KEY") ?? raw("TWO_FACTOR_ENCRYPTION_KEY");
+      raw("TWO_FACTOR_SECRET_KEY") ?? raw("TWO_FACTOR_ENCRYPTION_KEY") ?? raw("TWO_FACTOR_SECRET");
     if (encoded === undefined || encoded === "") {
       if (twoFactorEnabled) {
         problems.push(

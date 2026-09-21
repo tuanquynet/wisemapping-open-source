@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 
-import { buildConfig } from "../src/config.ts";
+import { buildConfig, getConfig, setConfig } from "../src/config.ts";
 import { dbAdapter } from "../src/db/client.ts";
 import type { Env } from "../src/http/env.ts";
 import { resetDb } from "./helpers/db.ts";
@@ -58,43 +58,62 @@ describe("requireTwoFactorEnabled middleware", () => {
   });
 
   test("returns 404 when c.get('config') is absent and Bun config defaults to disabled", async () => {
-    const testApp = new Hono<Env>();
-    testApp.get("/fallback-endpoint", requireTwoFactorEnabled, (c) =>
-      c.text("success"),
+    const saved = getConfig();
+    setConfig(
+      buildConfig({
+        JWT_SECRET: VALID_JWT_SECRET,
+        TWO_FACTOR_ENABLED: "false",
+      }),
     );
+    try {
+      const testApp = new Hono<Env>();
+      testApp.get("/fallback-endpoint", requireTwoFactorEnabled, (c) =>
+        c.text("success"),
+      );
 
-    const res = await testApp.request("/fallback-endpoint");
-    expect(res.status).toBe(404);
+      const res = await testApp.request("/fallback-endpoint");
+      expect(res.status).toBe(404);
+    } finally {
+      setConfig(saved);
+    }
   });
 
   test("AC #4: sign-in returns 200 bare token when TWO_FACTOR_ENABLED is false even if account has active enrollment", async () => {
-    const user = await createUser();
-    const account = await dbAdapter.get<{ id: number }>(
-      "SELECT id FROM account WHERE email = ?",
-      [user.email],
+    const saved = getConfig();
+    setConfig(
+      buildConfig({
+        JWT_SECRET: VALID_JWT_SECRET,
+        TWO_FACTOR_ENABLED: "false",
+      }),
     );
-    const accountId = account!.id;
+    try {
+      const user = await createUser();
+      const account = await dbAdapter.get<{ id: number }>(
+        "SELECT id FROM account WHERE email = ?",
+        [user.email],
+      );
+      const accountId = account!.id;
 
-    // Directly seed active enrollment rows (Story 1.1 schema)
-    await dbAdapter.run(
-      `INSERT INTO account_totp (account_id, secret_cipher, status, created_at, activated_at)
-       VALUES (?, ?, 'active', ?, ?)`,
-      [accountId, "v1$dummy$cipher", Date.now(), Date.now()],
-    );
-    await dbAdapter.run(
-      `INSERT INTO account_recovery_code (account_id, code_hash, generation, created_at)
-       VALUES (?, 'dummy-hash', 1, ?)`,
-      [accountId, Date.now()],
-    );
+      // Directly seed active enrollment rows (Story 1.1 schema)
+      await dbAdapter.run(
+        `INSERT INTO account_totp (account_id, secret_cipher, status, created_at, activated_at)
+         VALUES (?, ?, 'active', ?, ?)`,
+        [accountId, "v1$dummy$cipher", Date.now(), Date.now()],
+      );
+      await dbAdapter.run(
+        `INSERT INTO account_recovery_code (account_id, code_hash, generation, created_at)
+         VALUES (?, 'dummy-hash', 1, ?)`,
+        [accountId, Date.now()],
+      );
 
-    // Call /api/restful/authenticate
-    const res = await app.request("/api/restful/authenticate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: user.email, password: user.password }),
-    });
+      // Call /api/restful/authenticate
+      const res = await app.request("/api/restful/authenticate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email, password: user.password }),
+      });
 
-    expect(res.status).toBe(200);
+      expect(res.status).toBe(200);
     const token = await res.text();
     expect(token).toBeTruthy();
     expect(res.headers.get("Authorization")).toBe(`Bearer ${token}`);
@@ -111,5 +130,8 @@ describe("requireTwoFactorEnabled middleware", () => {
       [accountId],
     );
     expect(codeRows.length).toBe(1);
+    } finally {
+      setConfig(saved);
+    }
   });
 });
