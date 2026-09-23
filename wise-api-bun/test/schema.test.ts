@@ -13,6 +13,7 @@ describe("schema", () => {
     const db = freshDb();
     expect(tableNames(db)).toEqual([
       "account",
+      "account_oauth",
       "account_recovery_code",
       "account_totp",
       "collaboration",
@@ -41,6 +42,7 @@ describe("schema", () => {
     expect(names).toContain("ix_recovery_code_unused");
     expect(names).toContain("ix_trusted_device_account");
     expect(names).toContain("ix_security_event_account");
+    expect(names).toContain("ix_account_oauth_email");
     db.close();
   });
 
@@ -54,11 +56,11 @@ describe("schema", () => {
 
   test("migration is idempotent and records its version", () => {
     const db = freshDb();
-    expect(userVersion(db)).toBe(4);
+    expect(userVersion(db)).toBe(5);
     // Re-running must be a no-op rather than an error.
     const { migrate } = require("../src/db/migrate.ts");
     migrate(db);
-    expect(userVersion(db)).toBe(4);
+    expect(userVersion(db)).toBe(5);
     db.close();
   });
 

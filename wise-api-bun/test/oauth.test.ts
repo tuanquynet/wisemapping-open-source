@@ -2,10 +2,11 @@ import { describe, expect, test, beforeEach, afterEach, afterAll } from "bun:tes
 import { app } from "../src/app.ts";
 import { setConfig, buildConfig, getConfig } from "../src/config.ts";
 import * as accounts from "../src/db/repos/accounts.ts";
-import { signOAuthState, type OAuthState } from "../src/http/routes/oauth2.ts";
+import { dbAdapter } from "../src/db/client.ts";
+import { signOAuthState, signSyncCode, verifySyncCode, type OAuthState } from "../src/http/routes/oauth2.ts";
 import { verifyToken } from "../src/util/jwt.ts";
+import { bunPasswordHasher } from "../src/util/passwordHash.ts";
 import { resetDb } from "./helpers/db.ts";
-
 const VALID_JWT_SECRET = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OQ==";
 
 describe("OAuth2 routes", () => {
@@ -428,14 +429,51 @@ describe("OAuth2 routes", () => {
         "/api/restful/oauth2/google/callback?code=mock-code",
       );
       expect(res.status).toBe(302);
+      const location = res.headers.get("Location")!;
+      const callbackUrl = new URL(location);
+      expect(callbackUrl.searchParams.get("oauthSync")).toBe("false");
+      const syncCode = callbackUrl.searchParams.get("syncCode");
+      expect(syncCode).not.toBeNull();
+      expect(callbackUrl.searchParams.get("email")).toBe("existing@example.com");
 
-      const user = await accounts.findByEmail("existing@example.com");
+      // Before confirmation, user is not yet activated and not linked
+      let user = await accounts.findByEmail("existing@example.com");
+      expect(user?.activatedAt).toBeNull();
+      expect(await accounts.isOAuthLinked(user!.id, "google")).toBe(false);
+
+      // Confirm account sync
+      const confirmRes = await app.request(
+        `/api/restful/oauth2/confirmaccountsync?email=existing@example.com&code=${encodeURIComponent(syncCode!)}&provider=google`,
+        { method: "PUT" },
+      );
+      expect(confirmRes.status).toBe(200);
+      const confirmBody = (await confirmRes.json()) as {
+        email: string;
+        oauthSync: boolean;
+        jwtToken: string;
+      };
+      expect(confirmBody.oauthSync).toBe(true);
+      expect(confirmBody.email).toBe("existing@example.com");
+      expect(confirmBody.jwtToken).toBeDefined();
+
+      // Account is now activated, password hash is preserved, and Google is linked
+      user = await accounts.findByEmail("existing@example.com");
       expect(user).not.toBeNull();
       expect(user?.activatedAt).not.toBeNull();
       const hash = await accounts.passwordHashOf(user!.id);
       expect(hash).toBe("BCRYPT_HASH_12345");
-    });
+      expect(await accounts.isOAuthLinked(user!.id, "google")).toBe(true);
 
+      // Subsequent Google login immediately succeeds with oauthSync=true
+      const nextRes = await app.request(
+        "/api/restful/oauth2/google/callback?code=mock-code",
+      );
+      expect(nextRes.status).toBe(302);
+      const nextUrl = new URL(nextRes.headers.get("Location")!);
+      expect(nextUrl.searchParams.get("oauthSync")).toBe("true");
+      expect(nextUrl.searchParams.get("email")).toBe("existing@example.com");
+      expect(nextUrl.searchParams.get("jwtToken")).not.toBe("pending_sync");
+    });
     test("handles failed token exchange with redirect to login?error=oauth_failed", async () => {
       mockFetch(async (input: string | URL | Request) => {
         const url = String(input);
@@ -674,6 +712,339 @@ describe("OAuth2 routes", () => {
       const urlForged = new URL(resForged.headers.get("Location")!);
       expect(urlForged.origin).toBe("https://simpmind.tuanquynet.click");
       expect(urlForged.searchParams.get("state")).toBe("/c/maps/");
+    });
+  });
+
+  describe("Sync Code generation & verification", () => {
+    test("signs and verifies sync code successfully", () => {
+      const payload = {
+        accountId: 42,
+        email: "syncuser@example.com",
+        provider: "google",
+        timestamp: Date.now(),
+      };
+      const code = signSyncCode(payload, getConfig().jwtKey);
+      const verified = verifySyncCode(code, getConfig().jwtKey);
+      expect(verified).not.toBeNull();
+      expect(verified?.accountId).toBe(42);
+      expect(verified?.email).toBe("syncuser@example.com");
+      expect(verified?.provider).toBe("google");
+    });
+
+    test("rejects tampered signature", () => {
+      const payload = {
+        accountId: 42,
+        email: "syncuser@example.com",
+        provider: "google",
+        timestamp: Date.now(),
+      };
+      const code = signSyncCode(payload, getConfig().jwtKey);
+      const tampered = code.slice(0, -4) + "dead";
+      expect(verifySyncCode(tampered, getConfig().jwtKey)).toBeNull();
+    });
+
+    test("rejects expired sync code", () => {
+      const payload = {
+        accountId: 42,
+        email: "syncuser@example.com",
+        provider: "google",
+        timestamp: Date.now() - 20 * 60 * 1000, // 20 mins ago
+      };
+      const code = signSyncCode(payload, getConfig().jwtKey);
+      expect(verifySyncCode(code, getConfig().jwtKey)).toBeNull();
+    });
+  });
+
+  describe("PUT /api/restful/oauth2/confirmaccountsync", () => {
+    test("returns 400 when email or code is missing", async () => {
+      const res1 = await app.request("/api/restful/oauth2/confirmaccountsync", {
+        method: "PUT",
+      });
+      expect(res1.status).toBe(400);
+
+      const res2 = await app.request("/api/restful/oauth2/confirmaccountsync?email=user@test.com", {
+        method: "PUT",
+      });
+      expect(res2.status).toBe(400);
+    });
+
+    test("returns 400 when sync code is invalid or expired", async () => {
+      const res = await app.request(
+        "/api/restful/oauth2/confirmaccountsync?email=user@test.com&code=badcode",
+        { method: "PUT" },
+      );
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { msg: string };
+      expect(body.msg).toContain("Invalid or expired");
+    });
+
+    test("returns 400 when email does not match sync code payload", async () => {
+      const code = signSyncCode(
+        {
+          accountId: 99,
+          email: "correct@example.com",
+          provider: "google",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+
+      const res = await app.request(
+        `/api/restful/oauth2/confirmaccountsync?email=wrong@example.com&code=${encodeURIComponent(code)}`,
+        { method: "PUT" },
+      );
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { msg: string };
+      expect(body.msg).toContain("Email does not match");
+    });
+
+    test("returns 404 when account does not exist", async () => {
+      const code = signSyncCode(
+        {
+          accountId: 99999,
+          email: "ghost@example.com",
+          provider: "google",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+
+      const res = await app.request(
+        `/api/restful/oauth2/confirmaccountsync?email=ghost@example.com&code=${encodeURIComponent(code)}`,
+        { method: "PUT" },
+      );
+      expect(res.status).toBe(404);
+    });
+
+    test("successfully links provider, activates unactivated user, and issues valid JWT", async () => {
+      const user = await accounts.createOrUpgrade({
+        email: "unactivated@example.com",
+        firstname: "Un",
+        lastname: "Activated",
+        passwordHash: "HASH_SECRET",
+        locale: "en",
+        activationCode: null,
+        activatedAt: null,
+      });
+
+      const code = signSyncCode(
+        {
+          accountId: user.id,
+          email: "unactivated@example.com",
+          provider: "google",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+
+      const res = await app.request(
+        `/api/restful/oauth2/confirmaccountsync?email=unactivated@example.com&code=${encodeURIComponent(code)}`,
+        { method: "PUT" },
+      );
+      expect(res.status).toBe(200);
+      const authHeader = res.headers.get("Authorization");
+      expect(authHeader).toContain("Bearer ");
+
+      const body = (await res.json()) as {
+        email: string;
+        oauthSync: boolean;
+        jwtToken: string;
+      };
+      expect(body.oauthSync).toBe(true);
+      expect(body.email).toBe("unactivated@example.com");
+      expect(body.jwtToken).toBeDefined();
+
+      const claims = await verifyToken(body.jwtToken);
+      expect(claims?.sub).toBe("unactivated@example.com");
+
+      // Verify DB state
+      const updated = await accounts.findById(user.id);
+      expect(updated?.activatedAt).not.toBeNull();
+      expect(await accounts.isOAuthLinked(user.id, "google")).toBe(true);
+      expect(await accounts.passwordHashOf(user.id)).toBe("HASH_SECRET");
+    });
+  });
+
+  describe("Dual sign-in & 2FA with SSO", () => {
+    test("user can log in via password AND via linked Google SSO", async () => {
+      const password = "ValidPassword123!";
+      const hash = await bunPasswordHasher.hash(password);
+      const user = await accounts.createOrUpgrade({
+        email: "dual@example.com",
+        firstname: "Dual",
+        lastname: "User",
+        passwordHash: hash,
+        locale: "en",
+        activationCode: null,
+        activatedAt: Date.now(),
+      });
+
+      // 1. Log in via standard password authentication
+      const passwordRes = await app.request("/api/restful/authenticate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "dual@example.com",
+          password,
+        }),
+      });
+      expect(passwordRes.status).toBe(200);
+      const passwordJwt = await passwordRes.text();
+      expect(passwordJwt).not.toBe("");
+
+      // 2. Link Google account via sync code
+      const code = signSyncCode(
+        {
+          accountId: user.id,
+          email: "dual@example.com",
+          provider: "google",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+      const confirmRes = await app.request(
+        `/api/restful/oauth2/confirmaccountsync?email=dual@example.com&code=${encodeURIComponent(code)}`,
+        { method: "PUT" },
+      );
+      expect(confirmRes.status).toBe(200);
+
+      // 3. User can still log in via password
+      const passwordRes2 = await app.request("/api/restful/authenticate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "dual@example.com",
+          password,
+        }),
+      });
+      expect(passwordRes2.status).toBe(200);
+
+      // 4. User can also log in via Google SSO callback directly
+      mockFetch(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://oauth2.googleapis.com/token") {
+          return new Response(JSON.stringify({ access_token: "mock-token" }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url === "https://www.googleapis.com/oauth2/v3/userinfo") {
+          return new Response(
+            JSON.stringify({
+              email: "dual@example.com",
+              email_verified: true,
+              given_name: "Dual",
+              family_name: "User",
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const ssoRes = await app.request(
+        "/api/restful/oauth2/google/callback?code=mock-code",
+      );
+      expect(ssoRes.status).toBe(302);
+      const ssoLocation = ssoRes.headers.get("Location")!;
+      const ssoUrl = new URL(ssoLocation);
+      expect(ssoUrl.searchParams.get("oauthSync")).toBe("true");
+      expect(ssoUrl.searchParams.get("email")).toBe("dual@example.com");
+      expect(ssoUrl.searchParams.get("jwtToken")).not.toBe("pending_sync");
+    });
+
+    test("enforces 2FA challenge when linked account has 2FA enabled", async () => {
+      // Enable 2FA feature flag in config
+      setConfig(
+        buildConfig({
+          JWT_SECRET: VALID_JWT_SECRET,
+          GOOGLE_OAUTH_ENABLED: "true",
+          GOOGLE_CLIENT_ID: "test-client-id.apps.googleusercontent.com",
+          GOOGLE_CLIENT_SECRET: "test-client-secret",
+          API_BASE_URL: "https://api.test.com",
+          UI_BASE_URL: "https://simpmind.tuanquynet.click",
+          CORS_ALLOWED_ORIGINS: "https://simpmind.tuanquynet.click",
+          TWO_FACTOR_ENABLED: "true",
+          TWO_FACTOR_SECRET_KEY: Buffer.from("01234567890123456789012345678901").toString("base64"),
+        }),
+      );
+
+      const user = await accounts.createOrUpgrade({
+        email: "twofactor@example.com",
+        firstname: "Two",
+        lastname: "Factor",
+        passwordHash: "HASH_2FA",
+        locale: "en",
+        activationCode: null,
+        activatedAt: Date.now(),
+      });
+
+      // Enable 2FA on account in DB
+      await dbAdapter.run(
+        `INSERT INTO account_totp (account_id, secret_cipher, status, created_at, activated_at)
+         VALUES (?, 'v1$secret$cipher', 'active', ?, ?)`,
+        [user.id, Date.now(), Date.now()],
+      );
+
+      // Confirm linking returns 2FA challenge
+      const code = signSyncCode(
+        {
+          accountId: user.id,
+          email: "twofactor@example.com",
+          provider: "google",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+
+      const confirmRes = await app.request(
+        `/api/restful/oauth2/confirmaccountsync?email=twofactor@example.com&code=${encodeURIComponent(code)}`,
+        { method: "PUT" },
+      );
+      expect(confirmRes.status).toBe(200);
+      const confirmBody = (await confirmRes.json()) as {
+        twoFactorRequired?: boolean;
+        challengeToken?: string;
+      };
+      expect(confirmBody.twoFactorRequired).toBe(true);
+      expect(confirmBody.challengeToken).toBeDefined();
+
+      // Subsequent Google login redirects to login with challengeToken
+      mockFetch(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://oauth2.googleapis.com/token") {
+          return new Response(JSON.stringify({ access_token: "mock-token" }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url === "https://www.googleapis.com/oauth2/v3/userinfo") {
+          return new Response(
+            JSON.stringify({
+              email: "twofactor@example.com",
+              email_verified: true,
+              given_name: "Two",
+              family_name: "Factor",
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      });
+      const state = signOAuthState(
+        {
+          origin: "https://simpmind.tuanquynet.click",
+          redirect: "/c/maps/secret",
+          timestamp: Date.now(),
+        },
+        getConfig().jwtKey,
+      );
+      const ssoRes = await app.request(
+        `/api/restful/oauth2/google/callback?code=mock-code&state=${encodeURIComponent(state)}`,
+      );
+      expect(ssoRes.status).toBe(302);
+      const ssoUrl = new URL(ssoRes.headers.get("Location")!);
+      expect(ssoUrl.pathname).toBe("/c/login");
+      expect(ssoUrl.searchParams.get("challengeToken")).not.toBeNull();
+      expect(ssoUrl.searchParams.get("redirect")).toBe("/c/maps/secret");
     });
   });
 });

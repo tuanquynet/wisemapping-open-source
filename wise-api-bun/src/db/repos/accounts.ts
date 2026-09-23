@@ -161,6 +161,7 @@ export async function upsertGoogleAccount(input: GoogleAccountInput): Promise<Ac
        RETURNING *`,
       [emailTrimmed, emailLower, firstname, lastname, now],
     );
+    await linkOAuthProvider(inserted!.id, "google", null, emailLower);
     return toAccount(inserted!);
   }
 
@@ -175,7 +176,12 @@ export async function upsertGoogleAccount(input: GoogleAccountInput): Promise<Ac
        RETURNING *`,
       [firstname, lastname, now, existingRow.id],
     );
+    await linkOAuthProvider(upgraded!.id, "google", null, emailLower);
     return toAccount(upgraded!);
+  }
+
+  if (existingRow.password_hash === "OAUTH:GOOGLE") {
+    await linkOAuthProvider(existingRow.id, "google", null, emailLower);
   }
 
   if (existingRow.activated_at === null) {
@@ -187,6 +193,53 @@ export async function upsertGoogleAccount(input: GoogleAccountInput): Promise<Ac
   }
 
   return toAccount(existingRow);
+}
+
+export async function linkOAuthProvider(
+  accountId: number,
+  provider: string,
+  providerUserId: string | null,
+  email: string,
+): Promise<void> {
+  const now = Date.now();
+  await dbAdapter.run(
+    `INSERT INTO account_oauth (account_id, provider, provider_user_id, email, linked_at)
+     VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT (account_id, provider) DO UPDATE SET
+       provider_user_id = COALESCE(?3, account_oauth.provider_user_id),
+       email = ?4,
+       linked_at = ?5`,
+    [accountId, provider.toLowerCase(), providerUserId, email.trim().toLowerCase(), now],
+  );
+}
+
+export async function isOAuthLinked(
+  accountId: number,
+  provider: string,
+): Promise<boolean> {
+  const row = await dbAdapter.get<{ count: number }>(
+    `SELECT COUNT(*) as count FROM account_oauth WHERE account_id = ?1 AND provider = ?2`,
+    [accountId, provider.toLowerCase()],
+  );
+  return (row?.count ?? 0) > 0;
+}
+
+export async function getLinkedOAuthProviders(
+  accountId: number,
+): Promise<string[]> {
+  const rows = await dbAdapter.all<{ provider: string }>(
+    `SELECT provider FROM account_oauth WHERE account_id = ?1 ORDER BY linked_at ASC`,
+    [accountId],
+  );
+  return rows.map((r) => r.provider);
+}
+
+export async function activateAccount(accountId: number): Promise<void> {
+  const now = Date.now();
+  await dbAdapter.run(
+    `UPDATE account SET activated_at = COALESCE(activated_at, ?1) WHERE id = ?2`,
+    [now, accountId],
+  );
 }
 
 /** Columns the account self-service routes may write, as an allowlist. */

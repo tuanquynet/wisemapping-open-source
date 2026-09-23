@@ -317,3 +317,31 @@ describe("upsertGoogleAccount", () => {
     expect(await accounts.passwordHashOf(linked.id)).toBe("BCRYPT_ACTIVE_HASH");
   });
 });
+
+describe("OAuth provider linking", () => {
+  test("links provider, checks isOAuthLinked, and lists linked providers", async () => {
+    const account = await accounts.createOrUpgrade({
+      email: "oauthlink@example.com",
+      firstname: "OAuth",
+      lastname: "User",
+      passwordHash: "HASH123",
+      locale: "en",
+      activationCode: null,
+      activatedAt: Date.now(),
+    });
+
+    expect(await accounts.isOAuthLinked(account.id, "google")).toBe(false);
+    expect(await accounts.getLinkedOAuthProviders(account.id)).toEqual([]);
+
+    await accounts.linkOAuthProvider(account.id, "google", "sub-12345", "oauthlink@example.com");
+
+    expect(await accounts.isOAuthLinked(account.id, "google")).toBe(true);
+    expect(await accounts.isOAuthLinked(account.id, "facebook")).toBe(false);
+    expect(await accounts.getLinkedOAuthProviders(account.id)).toEqual(["google"]);
+
+    // Upsert / re-linking is idempotent
+    await accounts.linkOAuthProvider(account.id, "google", "sub-updated", "oauthlink@example.com");
+    expect(await accounts.isOAuthLinked(account.id, "google")).toBe(true);
+    expect(await accounts.getLinkedOAuthProviders(account.id)).toEqual(["google"]);
+  });
+});

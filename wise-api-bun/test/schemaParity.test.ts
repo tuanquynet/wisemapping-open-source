@@ -34,7 +34,7 @@ describe("schema parity between Bun schema.sql and D1 migrations", () => {
   const d1CommentsPath = resolve(root, "migrations/0002_add_comments.sql");
   const d1TwoFactorPath = resolve(root, "migrations/0003_add_two_factor.sql");
   const d1PendingSecretPath = resolve(root, "migrations/0004_add_pending_secret_cipher.sql");
-
+  const d1AccountOAuthPath = resolve(root, "migrations/0005_add_account_oauth.sql");
   test("migrations/0001_base_schema.sql exists", () => {
     expect(existsSync(d1MigrationPath)).toBe(true);
   });
@@ -51,6 +51,9 @@ describe("schema parity between Bun schema.sql and D1 migrations", () => {
     expect(existsSync(d1PendingSecretPath)).toBe(true);
   });
 
+  test("migrations/0005_add_account_oauth.sql exists", () => {
+    expect(existsSync(d1AccountOAuthPath)).toBe(true);
+  });
   test("statements in schema.sql match migrations/0001_base_schema.sql exactly", () => {
     const bunSql = readFileSync(bunSchemaPath, "utf-8");
     const d1Sql = readFileSync(d1MigrationPath, "utf-8");
@@ -85,6 +88,8 @@ describe("schema parity between Bun schema.sql and D1 migrations", () => {
     expect(indexes).toContain("ix_security_event_account");
     const totpColumns = db.query<{ name: string }, []>("PRAGMA table_info(account_totp)").all().map((c) => c.name);
     expect(totpColumns).toContain("pending_secret_cipher");
+    expect(tables).toContain("account_oauth");
+    expect(indexes).toContain("ix_account_oauth_email");
     db.close();
   });
 
@@ -150,6 +155,17 @@ describe("schema parity between Bun schema.sql and D1 migrations", () => {
     );
   });
 
+  test("D1 0005 migration SQL matches the Bun migrate.ts step (normalized)", () => {
+    const d1Sql = readFileSync(d1AccountOAuthPath, "utf-8");
+    const statements = normalizeSql(d1Sql);
+    expect(statements.length).toBe(2);
+    expect(statements).toContain(
+      "CREATE TABLE IF NOT EXISTS account_oauth ( account_id INTEGER NOT NULL REFERENCES account (id) ON DELETE CASCADE, provider TEXT NOT NULL, provider_user_id TEXT, email TEXT NOT NULL, linked_at INTEGER NOT NULL, PRIMARY KEY (account_id, provider) ) STRICT",
+    );
+    expect(statements).toContain(
+      "CREATE INDEX IF NOT EXISTS ix_account_oauth_email ON account_oauth (email)",
+    );
+  });
   test("normalizer catches deliberate statement differences", () => {
     const original = "CREATE TABLE a (id INTEGER); CREATE TABLE b (name TEXT);";
     const drifted = "CREATE TABLE a (id INTEGER); CREATE TABLE b (name TEXT, age INT);";

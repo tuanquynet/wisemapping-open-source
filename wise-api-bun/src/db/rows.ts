@@ -23,6 +23,14 @@ export interface AccountRow {
   two_factor_reenroll_required: 0 | 1;
 }
 
+export interface AccountOAuthRow {
+  account_id: number;
+  provider: string;
+  provider_user_id: string | null;
+  email: string;
+  linked_at: number;
+}
+
 export interface MindmapRow {
   id: number;
   title: string;
